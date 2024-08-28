@@ -118,10 +118,10 @@ function pluralise(count: number) {
  * @returns a promise for an object mapping the relative paths of the assets to the key of that
  * asset in the KV namespace.
  */
-export async function syncAssets(
+export async function syncLegacyAssets(
 	accountId: string | undefined,
 	scriptName: string,
-	siteAssets: AssetPaths | undefined,
+	siteAssets: LegacyAssetPaths | undefined,
 	preview: boolean,
 	dryRun: boolean | undefined,
 	oldAssetTTL: number | undefined
@@ -434,14 +434,14 @@ function validateAssetKey(assetKey: string) {
  *
  * Primarily this involves converting Windows backslashes to forward slashes.
  */
-function urlSafe(filePath: string): string {
+export function urlSafe(filePath: string): string {
 	return filePath.replace(/\\/g, "/");
 }
 
 /**
  * Information about the assets that should be uploaded
  */
-export interface AssetPaths {
+export interface LegacyAssetPaths {
 	/**
 	 * Absolute path to the root of the project.
 	 *
@@ -468,29 +468,33 @@ export interface AssetPaths {
  * Uses the args (passed from the command line) if available,
  * falling back to those defined in the config.
  *
- * (This function corresponds to --assets/config.assets)
+ * (This function corresponds to --legacy-assets/config.assets)
  *
  */
-export function getAssetPaths(
+export function getLegacyAssetPaths(
 	config: Config,
 	assetDirectory: string | undefined
-): AssetPaths | undefined {
+): LegacyAssetPaths | undefined {
 	const baseDirectory = assetDirectory
 		? process.cwd()
 		: path.resolve(path.dirname(config.configPath ?? "wrangler.toml"));
 
 	assetDirectory ??=
-		typeof config.assets === "string"
-			? config.assets
-			: config.assets !== undefined
-				? config.assets.bucket
+		typeof config.legacy_assets === "string"
+			? config.legacy_assets
+			: config.legacy_assets !== undefined
+				? config.legacy_assets.bucket
 				: undefined;
 
 	const includePatterns =
-		(typeof config.assets !== "string" && config.assets?.include) || [];
+		(typeof config.legacy_assets !== "string" &&
+			config.legacy_assets?.include) ||
+		[];
 
 	const excludePatterns =
-		(typeof config.assets !== "string" && config.assets?.exclude) || [];
+		(typeof config.legacy_assets !== "string" &&
+			config.legacy_assets?.exclude) ||
+		[];
 
 	return assetDirectory
 		? {
@@ -516,7 +520,7 @@ export function getSiteAssetPaths(
 	assetDirectory?: string,
 	includePatterns = config.site?.include ?? [],
 	excludePatterns = config.site?.exclude ?? []
-): AssetPaths | undefined {
+): LegacyAssetPaths | undefined {
 	const baseDirectory = assetDirectory
 		? process.cwd()
 		: path.resolve(path.dirname(config.configPath ?? "wrangler.toml"));

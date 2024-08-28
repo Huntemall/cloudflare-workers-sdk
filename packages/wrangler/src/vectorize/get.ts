@@ -1,7 +1,7 @@
 import { readConfig } from "../config";
 import { logger } from "../logger";
 import { getIndex } from "./client";
-import { vectorizeBetaWarning } from "./common";
+import { deprecatedV1DefaultFlag, vectorizeBetaWarning } from "./common";
 import type {
 	CommonYargsArgv,
 	StrictYargsOptionsToInterface,
@@ -19,6 +19,12 @@ export function options(yargs: CommonYargsArgv) {
 			type: "boolean",
 			default: false,
 		})
+		.option("deprecated-v1", {
+			type: "boolean",
+			default: deprecatedV1DefaultFlag,
+			describe:
+				"Fetch a deprecated V1 Vectorize index. This must be enabled if the index was created with V1 option.",
+		})
 		.epilogue(vectorizeBetaWarning);
 }
 
@@ -26,7 +32,7 @@ export async function handler(
 	args: StrictYargsOptionsToInterface<typeof options>
 ) {
 	const config = readConfig(args.config, args);
-	const index = await getIndex(config, args.name);
+	const index = await getIndex(config, args.name, args.deprecatedV1);
 
 	if (args.json) {
 		logger.log(JSON.stringify(index, null, 2));

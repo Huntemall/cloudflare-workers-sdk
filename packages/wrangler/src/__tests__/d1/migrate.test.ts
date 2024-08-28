@@ -10,7 +10,7 @@ import { mockSetTimeout } from "../helpers/mock-set-timeout";
 import { msw } from "../helpers/msw";
 import { runInTempDir } from "../helpers/run-in-tmp";
 import { runWrangler } from "../helpers/run-wrangler";
-import writeWranglerToml from "../helpers/write-wrangler-toml";
+import { writeWranglerToml } from "../helpers/write-wrangler-toml";
 
 describe("migrate", () => {
 	runInTempDir();
@@ -249,8 +249,7 @@ Your database may not be available to serve requests during the migration, conti
 		});
 
 		it("should try to read D1 config from wrangler.toml when logged in", async () => {
-			// no need to clear this env var as it's implicitly cleared by mockApiToken in afterEach
-			process.env.CLOUDFLARE_API_TOKEN = "api-token";
+			vi.stubEnv("CLOUDFLARE_API_TOKEN", "api-token");
 			reinitialiseAuthTokens();
 			setIsTTY(false);
 			writeWranglerToml();

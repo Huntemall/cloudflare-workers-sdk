@@ -1,11 +1,9 @@
 import dedent from "ts-dedent";
-import { chai, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { CLOUDFLARE_ACCOUNT_ID } from "./helpers/account-id";
 import { WranglerE2ETestHelper } from "./helpers/e2e-wrangler-test";
 import { generateResourceName } from "./helpers/generate-resource-name";
 import { normalizeOutput } from "./helpers/normalize";
-
-chai.config.truncateThreshold = 1e6;
 
 function matchVersionId(stdout: string): string {
 	return stdout.match(/Version ID:\s+([a-f\d-]+)/)?.[1] as string;
@@ -62,6 +60,7 @@ describe("versions deploy", { timeout: TIMEOUT }, () => {
 
 		expect(normalize(upload.stdout)).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: (TIMINGS)
 			Worker Version ID: 00000000-0000-0000-0000-000000000000
 			Uploaded tmp-e2e-worker-00000000-0000-0000-0000-000000000000 (TIMINGS)
 			To deploy this version to production traffic use the command wrangler versions deploy --experimental-versions
@@ -176,6 +175,7 @@ describe("versions deploy", { timeout: TIMEOUT }, () => {
 
 		expect(normalize(upload.stdout)).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: (TIMINGS)
 			Worker Version ID: 00000000-0000-0000-0000-000000000000
 			Uploaded tmp-e2e-worker-00000000-0000-0000-0000-000000000000 (TIMINGS)
 			To deploy this version to production traffic use the command wrangler versions deploy --experimental-versions
@@ -518,6 +518,115 @@ describe("versions deploy", { timeout: TIMEOUT }, () => {
 		expect(countOccurrences(deploymentsList.stdout, versionId0)).toBe(2); // once for regular deploy, once for rollback
 		expect(countOccurrences(deploymentsList.stdout, versionId1)).toBe(2); // once for versions deploy, once for rollback
 		expect(countOccurrences(deploymentsList.stdout, versionId2)).toBe(1); // once for versions deploy, only
+	});
+
+	it("fails to upload if using Legacy Assets", async () => {
+		await helper.seed({
+			"wrangler.toml": dedent`
+                name = "${workerName}"
+                main = "src/index.ts"
+                compatibility_date = "2023-01-01"
+            `,
+			"src/index.ts": dedent`
+                export default {
+                    fetch(request) {
+                        return new Response("Hello World!")
+                    }
+                }
+            `,
+			"package.json": dedent`
+                {
+                    "name": "${workerName}",
+                    "version": "0.0.0",
+                    "private": true
+                }
+            `,
+		});
+
+		const upload = await helper.run(
+			`wrangler versions upload --assets='./public'  --x-versions`
+		);
+
+		expect(normalize(upload.output)).toMatchInlineSnapshot(`
+			"X [ERROR] Legacy Assets does not support uploading versions through \`wrangler versions upload\`. You must use \`wrangler deploy\` instead.
+			🪵  Logs were written to "<LOG>""
+		`);
+	});
+
+	it("fails to upload if using Workers Sites", async () => {
+		await helper.seed({
+			"wrangler.toml": dedent`
+                name = "${workerName}"
+                main = "src/index.ts"
+                compatibility_date = "2023-01-01"
+
+                [site]
+                bucket = "./public"
+            `,
+			"src/index.ts": dedent`
+                export default {
+                    fetch(request) {
+                        return new Response("Hello World!")
+                    }
+                }
+            `,
+			"package.json": dedent`
+                {
+                    "name": "${workerName}",
+                    "version": "0.0.0",
+                    "private": true
+                }
+            `,
+		});
+
+		const upload = await helper.run(`wrangler versions upload  --x-versions`);
+
+		expect(normalize(upload.output)).toMatchInlineSnapshot(`
+			"X [ERROR] Workers Sites does not support uploading versions through \`wrangler versions upload\`. You must use \`wrangler deploy\` instead.
+			🪵  Logs were written to "<LOG>""
+		`);
+	});
+
+	// TODO: revisit once AUS stabilises/works
+	it.skip("currently fails to upload if using experimental assets", async () => {
+		await helper.seed({
+			"wrangler.toml": dedent`
+	            name = "${workerName}"
+	            compatibility_date = "2023-01-01"
+
+	            [experimental_assets]
+	            directory = "./public"
+	        `,
+			"public/asset.txt": `beep boop`,
+			"package.json": dedent`
+	            {
+	                "name": "${workerName}",
+	                "version": "0.0.0",
+	                "private": true
+	            }
+	        `,
+		});
+
+		const upload = await helper.run(`wrangler versions upload  --x-versions`);
+
+		expect(normalize(upload.output).split("X [ERROR]")[0])
+			.toMatchInlineSnapshot(`
+			"🌀 Building list of assets...
+			🌀 Starting asset upload...
+			🌀 Found 1 file to upload. Proceeding with upload...
+			+ /asset.txt
+			Bucket 1/1 upload failed. Retrying...
+			 APIError: A request to the Cloudflare API (/accounts/CLOUDFLARE_ACCOUNT_ID/workers/assets/upload) failed.
+			Bucket 1/1 upload failed. Retrying...
+			 APIError: A request to the Cloudflare API (/accounts/CLOUDFLARE_ACCOUNT_ID/workers/assets/upload) failed.
+			Bucket 1/1 upload failed. Retrying...
+			 APIError: A request to the Cloudflare API (/accounts/CLOUDFLARE_ACCOUNT_ID/workers/assets/upload) failed.
+			Bucket 1/1 upload failed. Retrying...
+			 APIError: A request to the Cloudflare API (/accounts/CLOUDFLARE_ACCOUNT_ID/workers/assets/upload) failed.
+			Bucket 1/1 upload failed. Retrying...
+			 APIError: A request to the Cloudflare API (/accounts/CLOUDFLARE_ACCOUNT_ID/workers/assets/upload) failed.
+			"
+		`);
 	});
 
 	it("should delete Worker", async () => {

@@ -1,6 +1,8 @@
 import path from "node:path";
 import { findWranglerToml, readConfig } from "../config";
 import { getEntry } from "../deployment-bundle/entry";
+import { UserError } from "../errors";
+import { processExperimentalAssetsArg } from "../experimental-assets";
 import {
 	getRules,
 	getScriptName,
@@ -9,6 +11,7 @@ import {
 } from "../index";
 import { logger } from "../logger";
 import * as metrics from "../metrics";
+import { writeOutput } from "../output";
 import { requireAuth } from "../user";
 import { collectKeyValues } from "../utils/collectKeyValues";
 import { versionsDeployHandler, versionsDeployOptions } from "./deploy";
@@ -86,10 +89,30 @@ export function versionsUploadOptions(yargs: CommonYargsArgv) {
 				type: "boolean",
 				default: false,
 			})
+			.option("legacy-assets", {
+				describe: "(Experimental) Static assets to be served",
+				type: "string",
+				requiresArg: true,
+				hidden: true,
+			})
+			.option("assets", {
+				describe: "(Experimental) Static assets to be served",
+				type: "string",
+				requiresArg: true,
+				hidden: true,
+			})
+			.option("experimental-assets", {
+				describe: "Static assets to be served",
+				type: "string",
+				alias: "x-assets",
+				requiresArg: true,
+				hidden: true,
+			})
 			.option("site", {
 				describe: "Root folder of static assets for Workers Sites",
 				type: "string",
 				requiresArg: true,
+				hidden: true,
 			})
 			.option("site-include", {
 				describe:
@@ -97,6 +120,7 @@ export function versionsUploadOptions(yargs: CommonYargsArgv) {
 				type: "string",
 				requiresArg: true,
 				array: true,
+				hidden: true,
 			})
 			.option("site-exclude", {
 				describe:
@@ -104,6 +128,7 @@ export function versionsUploadOptions(yargs: CommonYargsArgv) {
 				type: "string",
 				requiresArg: true,
 				array: true,
+				hidden: true,
 			})
 			.option("var", {
 				describe:
@@ -180,7 +205,7 @@ export async function versionsUploadHandler(
 		args.config || (args.script && findWranglerToml(path.dirname(args.script)));
 	const projectRoot = configPath && path.dirname(configPath);
 	const config = readConfig(configPath, args);
-	const entry = await getEntry(args, config, "deploy");
+	const entry = await getEntry(args, config, "versions upload");
 	await metrics.sendMetricsEvent(
 		"upload worker version",
 		{
@@ -190,6 +215,21 @@ export async function versionsUploadHandler(
 			sendMetrics: config.send_metrics,
 		}
 	);
+
+	args.legacyAssets = args.legacyAssets ?? args.assets;
+
+	if (args.site || config.site) {
+		throw new UserError(
+			"Workers Sites does not support uploading versions through `wrangler versions upload`. You must use `wrangler deploy` instead."
+		);
+	}
+	if (args.legacyAssets || config.legacy_assets) {
+		throw new UserError(
+			"Legacy Assets does not support uploading versions through `wrangler versions upload`. You must use `wrangler deploy` instead."
+		);
+	}
+
+	const experimentalAssets = processExperimentalAssetsArg(args, config);
 
 	if (args.latest) {
 		logger.warn(
@@ -202,12 +242,13 @@ export async function versionsUploadHandler(
 	const cliAlias = collectKeyValues(args.alias);
 
 	const accountId = args.dryRun ? undefined : await requireAuth(config);
+	const name = getScriptName(args, config);
 
 	await standardPricingWarning(config);
-	await versionsUpload({
+	const { versionId, workerTag } = await versionsUpload({
 		config,
 		accountId,
-		name: getScriptName(args, config),
+		name,
 		rules: getRules(config),
 		entry,
 		legacyEnv: isLegacyEnv(config),
@@ -222,6 +263,7 @@ export async function versionsUploadHandler(
 		jsxFactory: args.jsxFactory,
 		jsxFragment: args.jsxFragment,
 		tsconfig: args.tsconfig,
+		experimentalAssets,
 		minify: args.minify,
 		uploadSourceMaps: args.uploadSourceMaps,
 		nodeCompat: args.nodeCompat,
@@ -234,6 +276,14 @@ export async function versionsUploadHandler(
 
 		tag: args.tag,
 		message: args.message,
+	});
+
+	writeOutput({
+		type: "version-upload",
+		version: 1,
+		worker_name: name ?? null,
+		worker_tag: workerTag,
+		version_id: versionId,
 	});
 }
 

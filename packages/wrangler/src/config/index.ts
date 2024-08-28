@@ -65,7 +65,7 @@ export function readConfig(
 		// Load the configuration from disk if available
 		if (configPath?.endsWith("toml")) {
 			rawConfig = parseTOML(readFileSync(configPath), configPath);
-		} else if (configPath?.endsWith("json")) {
+		} else if (configPath?.endsWith("json") || configPath?.endsWith("jsonc")) {
 			rawConfig = parseJSONC(readFileSync(configPath), configPath);
 		}
 	} catch (e) {
@@ -90,7 +90,8 @@ export function readConfig(
 	 * configuration file belongs to a Workers or Pages project. This key
 	 * should always be set for Pages but never for Workers. Furthermore,
 	 * Pages projects currently have support for `wrangler.toml` only,
-	 * so we should error if `wrangler.json` is detected in a Pages project
+	 * so we should error if `wrangler.json` || `wrangler.jsonc` is detected
+	 * in a Pages project
 	 */
 	const isPagesConfigFile = isPagesConfig(rawConfig);
 	if (!isPagesConfigFile && requirePagesConfig) {
@@ -101,7 +102,9 @@ export function readConfig(
 	}
 	if (
 		isPagesConfigFile &&
-		(configPath?.endsWith("json") || isJsonConfigEnabled)
+		(configPath?.endsWith("json") ||
+			configPath?.endsWith("jsonc") ||
+			isJsonConfigEnabled)
 	) {
 		throw new UserError(
 			`Pages doesn't currently support JSON formatted config \`${
@@ -144,6 +147,15 @@ export function readConfig(
 		}
 	}
 
+	applyPythonConfig(config, args);
+
+	return config;
+}
+
+/**
+ * Modifies the provided config to support python workers, if the entrypoint is a .py file
+ */
+function applyPythonConfig(config: Config, args: ReadConfigCommandArgs) {
 	const mainModule = "script" in args ? args.script : config.main;
 	if (typeof mainModule === "string" && mainModule.endsWith(".py")) {
 		// Workers with a python entrypoint should have bundling turned off, since all of Wrangler's bundling is JS/TS specific
@@ -153,9 +165,12 @@ export function readConfig(
 		if (!config.rules.some((rule) => rule.type === "PythonModule")) {
 			config.rules.push({ type: "PythonModule", globs: ["**/*.py"] });
 		}
+		if (!config.compatibility_flags.includes("python_workers")) {
+			throw new UserError(
+				"The `python_workers` compatibility flag is required to use Python."
+			);
+		}
 	}
-
-	return config;
 }
 
 /**
@@ -169,6 +184,7 @@ export function findWranglerToml(
 	if (preferJson) {
 		return (
 			findUpSync(`wrangler.json`, { cwd: referencePath }) ??
+			findUpSync(`wrangler.jsonc`, { cwd: referencePath }) ??
 			findUpSync(`wrangler.toml`, { cwd: referencePath })
 		);
 	}
@@ -202,7 +218,6 @@ export function printBindings(bindings: CfWorkerInit["bindings"]) {
 		queues,
 		d1_databases,
 		vectorize,
-		constellation,
 		hyperdrive,
 		r2_buckets,
 		logfwdr,
@@ -321,18 +336,6 @@ export function printBindings(bindings: CfWorkerInit["bindings"]) {
 				return {
 					key: binding,
 					value: index_name,
-				};
-			}),
-		});
-	}
-
-	if (constellation !== undefined && constellation.length > 0) {
-		output.push({
-			type: "Constellation Projects",
-			entries: constellation.map(({ binding, project_id }) => {
-				return {
-					key: binding,
-					value: project_id,
 				};
 			}),
 		});

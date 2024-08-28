@@ -65,10 +65,10 @@ function createWorkerBundleFormData(
 		wasm_modules: undefined,
 		text_blobs: undefined,
 		data_blobs: undefined,
-		constellation: undefined,
 		dispatch_namespaces: undefined,
 		logfwdr: undefined,
 		unsafe: undefined,
+		experimental_assets: undefined,
 	};
 
 	// The upload API only accepts an empty string or no specified placement for the "off" mode.
@@ -93,6 +93,7 @@ function createWorkerBundleFormData(
 		placement: placement,
 		tail_consumers: undefined,
 		limits: config?.limits,
+		experimental_assets_jwt: undefined,
 	};
 
 	return createWorkerUploadForm(worker);

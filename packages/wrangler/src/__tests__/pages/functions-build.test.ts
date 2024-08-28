@@ -473,15 +473,17 @@ export const cat = "dog";`
 
 		expect(existsSync("public/_worker.bundle")).toBe(true);
 		expect(std.out).toMatchInlineSnapshot(`
-		"┌─────────┬──────┬──────────┐
-		│ Name    │ Type │ Size     │
-		├─────────┼──────┼──────────┤
-		│ cat.js  │ esm  │ xx KiB │
-		├─────────┼──────┼──────────┤
-		│ dog.mjs │ esm  │ xx KiB │
-		└─────────┴──────┴──────────┘
-		✨ Compiled Worker successfully"
-	`);
+			"┌───────────────────┬──────┬──────────┐
+			│ Name              │ Type │ Size     │
+			├───────────────────┼──────┼──────────┤
+			│ cat.js            │ esm  │ xx KiB │
+			├───────────────────┼──────┼──────────┤
+			│ dog.mjs           │ esm  │ xx KiB │
+			├───────────────────┼──────┼──────────┤
+			│ Total (2 modules) │      │ xx KiB │
+			└───────────────────┴──────┴──────────┘
+			✨ Compiled Worker successfully"
+		`);
 
 		const workerBundleContents = readFileSync("public/_worker.bundle", "utf-8");
 		const workerBundleWithConstantData = replaceRandomWithConstantData(
@@ -538,17 +540,13 @@ describe("functions build w/ config", () => {
 	const std = mockConsoleMethods();
 
 	runInTempDir();
-	const originalEnv = process.env;
-
 	afterEach(async () => {
-		process.env = originalEnv;
 		// Force a tick to ensure that all promises resolve
 		await endEventLoop();
 	});
 
 	beforeEach(() => {
-		// eslint-disable-next-line turbo/no-undeclared-env-vars
-		process.env.PAGES_ENVIRONMENT = "production";
+		vi.stubEnv("PAGES_ENVIRONMENT", "production");
 	});
 
 	it("should include all config in the _worker.bundle metadata", async () => {

@@ -32,7 +32,7 @@ export function runCommand(
 	{ cwd, env, timeout = DEFAULT_TIMEOUT }: CommandOptions = {}
 ) {
 	try {
-		const { status, stdout, stderr } = spawnSync(command, [], {
+		const { status, stdout, stderr, output } = spawnSync(command, [], {
 			shell: true,
 			cwd,
 			stdio: "pipe",
@@ -49,7 +49,12 @@ export function runCommand(
 				console.error(stderr);
 			}
 		}
-		return { status, stdout, stderr };
+		return {
+			status,
+			stdout,
+			stderr,
+			output: output.filter((line) => line !== null).join("\n"),
+		};
 	} catch (e) {
 		if (isTimedOutError(e)) {
 			throw new Error(dedent`
@@ -158,6 +163,9 @@ export class LongLivedCommand {
 						this.commandProcess.pid,
 						e
 					);
+					// fallthrough to resolve() because either the process is already dead
+					// or don't have permission to kill it or some other reason?
+					// either way, there is nothing we can do and we don't want to fail the test because of this
 				}
 				resolve();
 			});

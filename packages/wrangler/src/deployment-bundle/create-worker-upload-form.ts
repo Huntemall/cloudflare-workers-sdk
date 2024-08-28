@@ -88,7 +88,6 @@ export type WorkerMetadataBinding =
 			index_name: string;
 			internalEnv?: string;
 	  }
-	| { type: "constellation"; name: string; project: string }
 	| { type: "hyperdrive"; name: string; id: string }
 	| {
 			type: "service";
@@ -115,7 +114,8 @@ export type WorkerMetadataBinding =
 			type: "logfwdr";
 			name: string;
 			destination: string;
-	  };
+	  }
+	| { type: "assets"; name: string };
 
 // for PUT /accounts/:accountId/workers/scripts/:scriptName
 export type WorkerMetadataPut = {
@@ -138,6 +138,8 @@ export type WorkerMetadataPut = {
 	placement?: CfPlacement;
 	tail_consumers?: CfTailConsumer[];
 	limits?: CfUserLimits;
+	// experimental assets (EWC will expect 'assets')
+	assets?: string;
 	// Allow unsafe.metadata to add arbitrary properties at runtime
 	[key: string]: unknown;
 };
@@ -170,8 +172,17 @@ export function createWorkerUploadForm(worker: CfWorkerInit): FormData {
 		tail_consumers,
 		limits,
 		annotations,
+		experimental_assets_jwt,
 	} = worker;
 
+	// short circuit if static assets upload only
+	if (main.name === "no-op-assets-worker.js" && experimental_assets_jwt) {
+		formData.set(
+			"metadata",
+			JSON.stringify({ assets: experimental_assets_jwt })
+		);
+		return formData;
+	}
 	let { modules } = worker;
 
 	const metadataBindings: WorkerMetadataBinding[] = rawBindings ?? [];
@@ -249,14 +260,6 @@ export function createWorkerUploadForm(worker: CfWorkerInit): FormData {
 			name: binding,
 			type: "vectorize",
 			index_name: index_name,
-		});
-	});
-
-	bindings.constellation?.forEach(({ binding, project_id }) => {
-		metadataBindings.push({
-			name: binding,
-			type: "constellation",
-			project: project_id,
 		});
 	});
 
@@ -359,6 +362,13 @@ export function createWorkerUploadForm(worker: CfWorkerInit): FormData {
 		metadataBindings.push({
 			name: bindings.version_metadata.binding,
 			type: "version_metadata",
+		});
+	}
+
+	if (bindings.experimental_assets !== undefined) {
+		metadataBindings.push({
+			name: bindings.experimental_assets.binding,
+			type: "assets",
 		});
 	}
 
@@ -535,7 +545,9 @@ export function createWorkerUploadForm(worker: CfWorkerInit): FormData {
 			: { body_part: main.name }),
 		bindings: metadataBindings,
 		...(compatibility_date && { compatibility_date }),
-		...(compatibility_flags && { compatibility_flags }),
+		...(compatibility_flags && {
+			compatibility_flags,
+		}),
 		...(migrations && { migrations }),
 		capnp_schema: capnpSchemaOutputFile,
 		...(keep_bindings && { keep_bindings }),
@@ -544,6 +556,7 @@ export function createWorkerUploadForm(worker: CfWorkerInit): FormData {
 		...(tail_consumers && { tail_consumers }),
 		...(limits && { limits }),
 		...(annotations && { annotations }),
+		...(experimental_assets_jwt && { assets: experimental_assets_jwt }),
 	};
 
 	if (bindings.unsafe?.metadata !== undefined) {

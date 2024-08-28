@@ -9,7 +9,7 @@ import {
 	buildSitesOptions,
 } from "../../../dev/miniflare";
 import { run } from "../../../experimental-flags";
-import { getAssetPaths, getSiteAssetPaths } from "../../../sites";
+import { getLegacyAssetPaths, getSiteAssetPaths } from "../../../sites";
 import { CacheStorage } from "./caches";
 import { ExecutionContext } from "./executionContext";
 import { getServiceBindings } from "./services";
@@ -35,7 +35,7 @@ export type GetPlatformProxyOptions = {
 	 */
 	configPath?: string;
 	/**
-	 * Flag to indicate the utility to read a json config file (`wrangler.json`)
+	 * Flag to indicate the utility to read a json config file (`wrangler.json`/`wrangler.jsonc`)
 	 * instead of the toml one (`wrangler.toml`)
 	 *
 	 * Note: this feature is experimental
@@ -290,10 +290,10 @@ export function unstable_getMiniflareWorkerOptions(
 		);
 	}
 
-	const assetPaths = config.assets
-		? getAssetPaths(config, undefined)
+	const legacyAssetPaths = config.legacy_assets
+		? getLegacyAssetPaths(config, undefined)
 		: getSiteAssetPaths(config);
-	const sitesOptions = buildSitesOptions({ assetPaths });
+	const sitesOptions = buildSitesOptions({ legacyAssetPaths });
 
 	const workerOptions: SourcelessWorkerOptions = {
 		compatibilityDate: config.compatibility_date,

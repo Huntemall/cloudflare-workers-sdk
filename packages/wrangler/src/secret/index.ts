@@ -82,7 +82,6 @@ async function createDraftWorker({
 					d1_databases: [],
 					vectorize: [],
 					hyperdrive: [],
-					constellation: [],
 					services: [],
 					analytics_engine_datasets: [],
 					wasm_modules: {},
@@ -94,6 +93,7 @@ async function createDraftWorker({
 					dispatch_namespaces: [],
 					mtls_certificates: [],
 					logfwdr: { bindings: [] },
+					experimental_assets: undefined,
 					unsafe: {
 						bindings: undefined,
 						metadata: undefined,
@@ -111,6 +111,7 @@ async function createDraftWorker({
 				placement: undefined,
 				tail_consumers: undefined,
 				limits: undefined,
+				experimental_assets_jwt: undefined,
 			}),
 		}
 	);

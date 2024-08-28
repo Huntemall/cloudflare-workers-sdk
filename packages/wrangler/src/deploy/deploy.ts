@@ -12,6 +12,7 @@ import {
 } from "../deployment-bundle/bundle-reporter";
 import { getBundleType } from "../deployment-bundle/bundle-type";
 import { createWorkerUploadForm } from "../deployment-bundle/create-worker-upload-form";
+import { logBuildOutput } from "../deployment-bundle/esbuild-plugins/log-build-output";
 import {
 	findAdditionalModules,
 	writeAdditionalModules,
@@ -20,12 +21,13 @@ import {
 	createModuleCollector,
 	getWrangler1xLegacyModuleReferences,
 } from "../deployment-bundle/module-collection";
-import { validateNodeCompat } from "../deployment-bundle/node-compat";
+import { getNodeCompatMode } from "../deployment-bundle/node-compat";
 import { loadSourceMaps } from "../deployment-bundle/source-maps";
 import { addHyphens } from "../deployments";
 import { confirm } from "../dialogs";
 import { getMigrationsToUpload } from "../durable";
 import { UserError } from "../errors";
+import { syncExperimentalAssets } from "../experimental-assets";
 import { logger } from "../logger";
 import { getMetricsUsageHeaders } from "../metrics";
 import { isNavigatorDefined } from "../navigator-user-agent";
@@ -39,7 +41,7 @@ import {
 	putConsumerById,
 	putQueue,
 } from "../queues/client";
-import { syncAssets } from "../sites";
+import { syncLegacyAssets } from "../sites";
 import {
 	getSourceMappedString,
 	maybeRetrieveFileSourceMap,
@@ -51,6 +53,7 @@ import { getZoneForRoute } from "../zones";
 import type { Config } from "../config";
 import type {
 	CustomDomainRoute,
+	ExperimentalAssets,
 	Route,
 	Rule,
 	ZoneIdRoute,
@@ -63,7 +66,7 @@ import type {
 	CfWorkerInit,
 } from "../deployment-bundle/worker";
 import type { PostQueueBody, PostTypedConsumerBody } from "../queues/client";
-import type { AssetPaths } from "../sites";
+import type { LegacyAssetPaths } from "../sites";
 import type { RetrieveSourceMapFunction } from "../sourcemap";
 
 type Props = {
@@ -75,7 +78,8 @@ type Props = {
 	env: string | undefined;
 	compatibilityDate: string | undefined;
 	compatibilityFlags: string[] | undefined;
-	assetPaths: AssetPaths | undefined;
+	legacyAssetPaths: LegacyAssetPaths | undefined;
+	experimentalAssets: ExperimentalAssets | undefined;
 	vars: Record<string, string> | undefined;
 	defines: Record<string, string> | undefined;
 	alias: Record<string, string> | undefined;
@@ -305,35 +309,45 @@ Update them to point to this script instead?`;
 	return domains.map((domain) => renderRoute(domain));
 }
 
-export default async function deploy(
-	props: Props
-): Promise<{ sourceMapSize?: number }> {
+export default async function deploy(props: Props): Promise<{
+	sourceMapSize?: number;
+	deploymentId: string | null;
+	workerTag: string | null;
+	targets?: string[];
+}> {
 	// TODO: warn if git/hg has uncommitted changes
 	const { config, accountId, name } = props;
+	let workerTag: string | null = null;
+	let deploymentId: string | null = null;
+
 	if (!props.dispatchNamespace && accountId && name) {
 		try {
-			const serviceMetaData = await fetchResult(
-				`/accounts/${accountId}/workers/services/${name}`
-			);
-			const { default_environment } = serviceMetaData as {
+			const serviceMetaData = await fetchResult<{
 				default_environment: {
-					script: { last_deployed_from: "dash" | "wrangler" | "api" };
+					script: {
+						tag: string;
+						last_deployed_from: "dash" | "wrangler" | "api";
+					};
 				};
-			};
+			}>(`/accounts/${accountId}/workers/services/${name}`);
+			const {
+				default_environment: { script },
+			} = serviceMetaData;
+			workerTag = script.tag;
 
-			if (default_environment.script.last_deployed_from === "dash") {
+			if (script.last_deployed_from === "dash") {
 				logger.warn(
 					`You are about to publish a Workers Service that was last published via the Cloudflare Dashboard.\nEdits that have been made via the dashboard will be overridden by your local code and config.`
 				);
 				if (!(await confirm("Would you like to continue?"))) {
-					return {};
+					return { deploymentId, workerTag };
 				}
-			} else if (default_environment.script.last_deployed_from === "api") {
+			} else if (script.last_deployed_from === "api") {
 				logger.warn(
 					`You are about to publish a Workers Service that was last updated via the script API.\nEdits that have been made via the script API will be overridden by your local code and config.`
 				);
 				if (!(await confirm("Would you like to continue?"))) {
-					return {};
+					return { deploymentId, workerTag };
 				}
 			}
 		} catch (e) {
@@ -383,13 +397,12 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 
 	const minify = props.minify ?? config.minify;
 
-	const nodejsCompatMode = validateNodeCompat({
-		legacyNodeCompat: props.nodeCompat ?? config.node_compat ?? false,
-		compatibilityFlags: props.compatibilityFlags ?? config.compatibility_flags,
-		noBundle: props.noBundle ?? config.no_bundle ?? false,
-	});
 	const compatibilityFlags =
 		props.compatibilityFlags ?? config.compatibility_flags;
+	const nodejsCompatMode = getNodeCompatMode(compatibilityFlags, {
+		nodeCompat: props.nodeCompat ?? config.node_compat,
+		noBundle: props.noBundle ?? config.no_bundle,
+	});
 
 	// Warn if user tries minify with no-bundle
 	if (props.noBundle && minify) {
@@ -435,21 +448,19 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 			? `/accounts/${accountId}/workers/services/${scriptName}/environments/${envName}`
 			: `/accounts/${accountId}/workers/scripts/${scriptName}`;
 
-	let deploymentId: string | null = null;
-
 	const { format } = props.entry;
 
 	if (!props.dispatchNamespace && prod && accountId && scriptName) {
 		const yes = await confirmLatestDeploymentOverwrite(accountId, scriptName);
 		if (!yes) {
 			cancel("Aborting deploy...");
-			return {};
+			return { deploymentId, workerTag };
 		}
 	}
 
 	if (
 		!props.isWorkersSite &&
-		Boolean(props.assetPaths) &&
+		Boolean(props.legacyAssetPaths) &&
 		format === "service-worker"
 	) {
 		throw new UserError(
@@ -520,8 +531,8 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 						bundle: true,
 						additionalModules: [],
 						moduleCollector,
-						serveAssetsFromWorker:
-							!props.isWorkersSite && Boolean(props.assetPaths),
+						serveLegacyAssetsFromWorker:
+							!props.isWorkersSite && Boolean(props.legacyAssetPaths),
 						doBindings: config.durable_objects.bindings,
 						jsxFactory,
 						jsxFragment,
@@ -532,7 +543,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 						define: { ...config.define, ...props.defines },
 						checkFetch: false,
 						alias: config.alias,
-						assets: config.assets,
+						legacyAssets: config.legacy_assets,
 						// enable the cache when publishing
 						bypassAssetCache: false,
 						// We want to know if the build is for development or publishing
@@ -544,21 +555,9 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 							props.compatibilityDate ?? config.compatibility_date,
 							props.compatibilityFlags ?? config.compatibility_flags
 						),
+						plugins: [logBuildOutput(nodejsCompatMode)],
 					}
 				);
-
-		// Add modules to dependencies for size warning
-		for (const module of modules) {
-			const modulePath =
-				module.filePath === undefined
-					? module.name
-					: path.relative("", module.filePath);
-			const bytesInOutput =
-				typeof module.content === "string"
-					? Buffer.byteLength(module.content)
-					: module.content.byteLength;
-			dependencies[modulePath] = { bytesInOutput };
-		}
 
 		// Add modules to dependencies for size warning
 		for (const module of modules) {
@@ -587,14 +586,24 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 				})
 			: undefined;
 
-		const assets = await syncAssets(
+		// Upload assets if experimental assets is being used
+		const experimentalAssetsJwt: CfWorkerInit["experimental_assets_jwt"] =
+			props.experimentalAssets && !props.dryRun
+				? await syncExperimentalAssets(
+						accountId,
+						scriptName,
+						props.experimentalAssets.directory
+					)
+				: undefined;
+
+		const legacyAssets = await syncLegacyAssets(
 			accountId,
 			// When we're using the newer service environments, we wouldn't
 			// have added the env name on to the script name. However, we must
 			// include it in the kv namespace name regardless (since there's no
 			// concept of service environments for kv namespaces yet).
 			scriptName + (!props.legacyEnv && props.env ? `-${props.env}` : ""),
-			props.assetPaths,
+			props.legacyAssetPaths,
 			false,
 			props.dryRun,
 			props.oldAssetTtl
@@ -602,8 +611,8 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 
 		const bindings: CfWorkerInit["bindings"] = {
 			kv_namespaces: (config.kv_namespaces || []).concat(
-				assets.namespace
-					? { binding: "__STATIC_CONTENT", id: assets.namespace }
+				legacyAssets.namespace
+					? { binding: "__STATIC_CONTENT", id: legacyAssets.namespace }
 					: []
 			),
 			send_email: config.send_email,
@@ -614,7 +623,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 			version_metadata: config.version_metadata,
 			text_blobs: {
 				...config.text_blobs,
-				...(assets.manifest &&
+				...(legacyAssets.manifest &&
 					format === "service-worker" && {
 						__STATIC_CONTENT_MANIFEST: "__STATIC_CONTENT_MANIFEST",
 					}),
@@ -627,13 +636,15 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 			r2_buckets: config.r2_buckets,
 			d1_databases: config.d1_databases,
 			vectorize: config.vectorize,
-			constellation: config.constellation,
 			hyperdrive: config.hyperdrive,
 			services: config.services,
 			analytics_engine_datasets: config.analytics_engine_datasets,
 			dispatch_namespaces: config.dispatch_namespaces,
 			mtls_certificates: config.mtls_certificates,
 			logfwdr: config.logfwdr,
+			experimental_assets: config.experimental_assets?.binding
+				? { binding: config.experimental_assets.binding }
+				: undefined,
 			unsafe: {
 				bindings: config.unsafe.bindings,
 				metadata: config.unsafe.metadata,
@@ -641,11 +652,11 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 			},
 		};
 
-		if (assets.manifest) {
+		if (legacyAssets.manifest) {
 			modules.push({
 				name: "__STATIC_CONTENT_MANIFEST",
 				filePath: undefined,
-				content: JSON.stringify(assets.manifest),
+				content: JSON.stringify(legacyAssets.manifest),
 				type: "text",
 			});
 		}
@@ -678,6 +689,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 			placement,
 			tail_consumers: config.tail_consumers,
 			limits: config.limits,
+			experimental_assets_jwt: experimentalAssetsJwt,
 		};
 
 		sourceMapSize = worker.sourceMaps?.reduce(
@@ -707,10 +719,11 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 			}
 		}
 
-		printBindings({ ...withoutStaticAssets, vars: maskedVars });
-
-		if (!props.dryRun) {
+		if (props.dryRun) {
+			printBindings({ ...withoutStaticAssets, vars: maskedVars });
+		} else {
 			await ensureQueuesExistByConfig(config);
+			let bindingsPrinted = false;
 
 			// Upload the script so it has time to propagate.
 			// We can also now tell whether available_on_subdomain is set
@@ -722,6 +735,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 					pipeline_hash: string | null;
 					mutable_pipeline_id: string | null;
 					deployment_id: string | null;
+					startup_time_ms: number;
 				}>(
 					workerUrl,
 					{
@@ -736,6 +750,10 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 						excludeScript: "true",
 					})
 				);
+
+				logger.log("Worker Startup Time:", result.startup_time_ms, "ms");
+				bindingsPrinted = true;
+				printBindings({ ...withoutStaticAssets, vars: maskedVars });
 
 				deploymentId = addHyphens(result.deployment_id) ?? result.deployment_id;
 
@@ -760,6 +778,9 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 					}
 				}
 			} catch (err) {
+				if (!bindingsPrinted) {
+					printBindings({ ...withoutStaticAssets, vars: maskedVars });
+				}
 				helpIfErrorIsSizeOrScriptStartup(err, dependencies);
 
 				// Apply source mapping to validation startup errors if possible
@@ -819,7 +840,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 
 	if (props.dryRun) {
 		logger.log(`--dry-run: exiting now.`);
-		return {};
+		return { deploymentId, workerTag };
 	}
 	assert(accountId, "Missing accountId");
 
@@ -830,18 +851,23 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 	// Early exit for WfP since it doesn't need the below code
 	if (props.dispatchNamespace !== undefined) {
 		deployWfpUserWorker(props.dispatchNamespace, deploymentId);
-		return {};
+		return { deploymentId, workerTag };
 	}
 
 	// deploy triggers
-	await triggersDeploy(props);
+	const targets = await triggersDeploy(props);
 
 	logger.log("Current Deployment ID:", deploymentId);
 	logger.log("Current Version ID:", deploymentId);
 
 	logVersionIdChange();
 
-	return { sourceMapSize };
+	return {
+		sourceMapSize,
+		deploymentId,
+		workerTag,
+		targets: targets ?? [],
+	};
 }
 
 function deployWfpUserWorker(

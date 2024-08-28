@@ -1,6 +1,6 @@
 import assert from "node:assert";
 import { randomUUID } from "node:crypto";
-import path from "node:path";
+import path, { dirname } from "node:path";
 import * as esmLexer from "es-module-lexer";
 import {
 	CoreHeaders,
@@ -16,6 +16,7 @@ import {
 	EXTERNAL_AI_WORKER_NAME,
 	EXTERNAL_AI_WORKER_SCRIPT,
 } from "../ai/fetcher";
+import { readConfig } from "../config";
 import { ModuleTypeToRuleType } from "../deployment-bundle/module-collection";
 import { withSourceURLs } from "../deployment-bundle/source-url";
 import { UserError } from "../errors";
@@ -24,6 +25,7 @@ import { getSourceMappedString } from "../sourcemap";
 import { updateCheck } from "../update-check";
 import type { ServiceFetch } from "../api";
 import type { Config } from "../config";
+import type { ExperimentalAssets } from "../config/environment";
 import type {
 	CfD1Database,
 	CfDurableObject,
@@ -40,7 +42,7 @@ import type {
 	WorkerRegistry,
 } from "../dev-registry";
 import type { LoggerLevel } from "../logger";
-import type { AssetPaths } from "../sites";
+import type { LegacyAssetPaths } from "../sites";
 import type { EsbuildBundle } from "./use-esbuild";
 import type { MiniflareOptions, SourceOptions, WorkerOptions } from "miniflare";
 import type { UUID } from "node:crypto";
@@ -171,7 +173,8 @@ export interface ConfigBundle {
 	compatibilityFlags: string[] | undefined;
 	bindings: CfWorkerInit["bindings"];
 	workerDefinitions: WorkerRegistry | undefined;
-	assetPaths: AssetPaths | undefined;
+	legacyAssetPaths: LegacyAssetPaths | undefined;
+	experimentalAssets: ExperimentalAssets | undefined;
 	initialPort: Port;
 	initialIp: string;
 	rules: Config["rules"];
@@ -374,7 +377,7 @@ type MiniflareBindingsConfig = Pick<
 	| "services"
 	| "serviceBindings"
 > &
-	Partial<Pick<ConfigBundle, "format" | "bundle">>;
+	Partial<Pick<ConfigBundle, "format" | "bundle" | "experimentalAssets">>;
 
 // TODO(someday): would be nice to type these methods more, can we export types for
 //  each plugin options schema and use those
@@ -408,7 +411,9 @@ export function buildMiniflareBindingOptions(config: MiniflareBindingsConfig): {
 	// Setup service bindings to external services
 	const serviceBindings: NonNullable<WorkerOptions["serviceBindings"]> = {
 		...config.serviceBindings,
+		...(config.experimentalAssets ? { ASSET_WORKER: "asset-worker" } : {}),
 	};
+
 	const notFoundServices = new Set<string>();
 	for (const service of config.services ?? []) {
 		if (service.service === config.name) {
@@ -675,11 +680,11 @@ export function buildPersistOptions(
 }
 
 export function buildSitesOptions({
-	assetPaths,
-}: Pick<ConfigBundle, "assetPaths">) {
-	if (assetPaths !== undefined) {
+	legacyAssetPaths,
+}: Pick<ConfigBundle, "legacyAssetPaths">) {
+	if (legacyAssetPaths !== undefined) {
 		const { baseDirectory, assetDirectory, includePatterns, excludePatterns } =
-			assetPaths;
+			legacyAssetPaths;
 		return {
 			sitePath: path.join(baseDirectory, assetDirectory),
 			siteInclude: includePatterns.length > 0 ? includePatterns : undefined,
@@ -723,6 +728,9 @@ export function handleRuntimeStdio(stdout: Readable, stderr: Readable) {
 		isCodeMovedWarning(chunk: string) {
 			return /CODE_MOVED for unknown code block/.test(chunk);
 		},
+		isAccessViolation(chunk: string) {
+			return chunk.includes("access violation;");
+		},
 	};
 
 	stdout.on("data", (chunk: Buffer | string) => {
@@ -747,7 +755,7 @@ export function handleRuntimeStdio(stdout: Readable, stderr: Readable) {
 			logger.warn(chunk);
 		}
 
-		// anything not exlicitly handled above should be logged as info (via stdout)
+		// anything not explicitly handled above should be logged as info (via stdout)
 		else {
 			logger.info(getSourceMappedString(chunk));
 		}
@@ -770,15 +778,33 @@ export function handleRuntimeStdio(stdout: Readable, stderr: Readable) {
 					`Address already in use (${address}). Please check that you are not already running a server on this address or specify a different port with --port.`
 				);
 
-				// even though we've intercepted the chunk and logged a better error to stderr
-				// fallthrough to log the original chunk to the debug log file for observability
+				// Log the original error to the debug logs.
+				logger.debug(chunk);
+			}
+			// In the past we have seen Access Violation errors on Windows, which may be caused by an outdated
+			// version of the Windows OS or the Microsoft Visual C++ Redistributable.
+			// See https://github.com/cloudflare/workers-sdk/issues/6170#issuecomment-2245209918
+			else if (classifiers.isAccessViolation(chunk)) {
+				let error = "There was an access violation in the runtime.";
+				if (process.platform === "win32") {
+					error +=
+						"\nOn Windows, this may be caused by an outdated Microsoft Visual C++ Redistributable library.\n" +
+						"Check that you have the latest version installed.\n" +
+						"See https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist.";
+				}
+				logger.error(error);
+
+				// Log the original error to the debug logs.
+				logger.debug(chunk);
 			}
 
 			// IGNORABLE:
 			// anything else not handled above is considered ignorable
 			// so send it to the debug logs which are discarded unless
 			// the user explicitly sets a logLevel indicating they care
-			logger.debug(chunk);
+			else {
+				logger.debug(chunk);
+			}
 		}
 
 		// known case: warnings are not errors, log them as such
@@ -791,12 +817,16 @@ export function handleRuntimeStdio(stdout: Readable, stderr: Readable) {
 			// ignore entirely, don't even send it to the debug log file
 		}
 
-		// anything not exlicitly handled above should be logged as an error (via stderr)
+		// anything not explicitly handled above should be logged as an error (via stderr)
 		else {
 			logger.error(getSourceMappedString(chunk));
 		}
 	});
 }
+
+let didWarnMiniflareCronSupport = false;
+let didWarnMiniflareVectorizeSupport = false;
+let didWarnAiAccountUsage = false;
 
 export async function buildMiniflareOptions(
 	log: Log,
@@ -808,20 +838,31 @@ export async function buildMiniflareOptions(
 	entrypointNames: string[];
 }> {
 	if (config.crons.length > 0) {
-		logger.warn("Miniflare 3 does not support CRON triggers yet, ignoring...");
+		if (!didWarnMiniflareCronSupport) {
+			didWarnMiniflareCronSupport = true;
+			log.warn(
+				"Miniflare 3 does not currently trigger scheduled Workers automatically.\nUse `--test-scheduled` to forward fetch triggers."
+			);
+		}
 	}
 
 	if (config.bindings.ai) {
-		logger.warn(
-			"Using Workers AI always accesses your Cloudflare account in order to run AI models, and so will incur usage charges even in local development."
-		);
+		if (!didWarnAiAccountUsage) {
+			didWarnAiAccountUsage = true;
+			logger.warn(
+				"Using Workers AI always accesses your Cloudflare account in order to run AI models, and so will incur usage charges even in local development."
+			);
+		}
 	}
 
 	if (config.bindings.vectorize?.length) {
-		// TODO: add local support for Vectorize bindings (https://github.com/cloudflare/workers-sdk/issues/4360)
-		logger.warn(
-			"Vectorize bindings are not currently supported in local mode. Please use --remote if you are working with them."
-		);
+		if (!didWarnMiniflareVectorizeSupport) {
+			didWarnMiniflareVectorizeSupport = true;
+			// TODO: add local support for Vectorize bindings (https://github.com/cloudflare/workers-sdk/issues/4360)
+			logger.warn(
+				"Vectorize bindings are not currently supported in local mode. Please use --remote if you are working with them."
+			);
+		}
 	}
 
 	const upstream =
@@ -866,10 +907,58 @@ export async function buildMiniflareOptions(
 					proxy: true,
 				})),
 			},
+			...getAssetServerWorker(config),
 			...externalWorkers,
 		],
 	};
 	return { options, internalObjects, entrypointNames };
+}
+
+function getAssetServerWorker(
+	config: Omit<ConfigBundle, "rules">
+): WorkerOptions[] {
+	if (!config.experimentalAssets) {
+		return [];
+	}
+	const assetServerModulePath = require.resolve(
+		"@cloudflare/workers-shared/dist/asset-worker.mjs"
+	);
+	const assetServerConfigPath = require.resolve(
+		"@cloudflare/workers-shared/dist/asset-worker.toml"
+	);
+	let assetServerConfig: Config | undefined;
+
+	try {
+		assetServerConfig = readConfig(assetServerConfigPath, {});
+	} catch (err) {
+		throw new UserError(
+			"Failed to read the Asset Worker configuration file.\n" + `${err}`
+		);
+	}
+
+	return [
+		{
+			name: assetServerConfig?.name,
+			compatibilityDate: assetServerConfig?.compatibility_date,
+			compatibilityFlags: assetServerConfig?.compatibility_flags,
+			modulesRoot: dirname(assetServerModulePath),
+			modules: [
+				{
+					type: "ESModule",
+					path: assetServerModulePath,
+				},
+			],
+			unsafeDirectSockets: [
+				{
+					host: "127.0.0.1",
+					port: 0,
+				},
+			],
+			assetsPath: config.experimentalAssets.directory,
+			assetsKVBindingName: "ASSETS_KV_NAMESPACE",
+			assetsManifestBindingName: "ASSETS_MANIFEST",
+		},
+	];
 }
 
 export interface ReloadedEventOptions {
@@ -934,9 +1023,11 @@ export class MiniflareServer extends TypedEventTarget<MiniflareServerEventMap> {
 					config,
 					this.#proxyToUserWorkerAuthenticationSecret
 				);
+
 			if (opts?.signal?.aborted) {
 				return;
 			}
+
 			if (this.#mf === undefined) {
 				this.#mf = new Miniflare(options);
 			} else {
@@ -968,6 +1059,7 @@ export class MiniflareServer extends TypedEventTarget<MiniflareServerEventMap> {
 			this.dispatchEvent(new ErrorEvent("error", { error }));
 		}
 	}
+
 	onBundleUpdate(config: ConfigBundle, opts?: Abortable): Promise<void> {
 		return this.#mutex.runWith(() => this.#onBundleUpdate(config, opts));
 	}

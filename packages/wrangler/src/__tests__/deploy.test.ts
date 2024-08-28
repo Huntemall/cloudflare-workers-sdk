@@ -47,9 +47,10 @@ import { mswListNewDeploymentsLatestFull } from "./helpers/msw/handlers/versions
 import { runInTempDir } from "./helpers/run-in-tmp";
 import { runWrangler } from "./helpers/run-wrangler";
 import { writeWorkerSource } from "./helpers/write-worker-source";
-import writeWranglerToml from "./helpers/write-wrangler-toml";
+import { writeWranglerToml } from "./helpers/write-wrangler-toml";
 import type { Config } from "../config";
 import type { CustomDomain, CustomDomainChangeset } from "../deploy/deploy";
+import type { AssetManifest, UploadPayloadFile } from "../experimental-assets";
 import type { KVNamespaceInfo } from "../kv/helpers";
 import type {
 	PostQueueBody,
@@ -88,6 +89,250 @@ describe("deploy", () => {
 		clearDialogs();
 	});
 
+	it("should output log file with deployment details", async () => {
+		vi.stubEnv("WRANGLER_OUTPUT_FILE_DIRECTORY", "output");
+		vi.stubEnv("WRANGLER_OUTPUT_FILE_PATH", "");
+		writeWorkerSource();
+		writeWranglerToml({
+			routes: ["example.com/some-route/*"],
+			workers_dev: true,
+		});
+		mockSubDomainRequest();
+		mockUploadWorkerRequest();
+		mockUpdateWorkerRequest({ enabled: false });
+		mockPublishRoutesRequest({ routes: ["example.com/some-route/*"] });
+
+		await runWrangler("deploy ./index.js");
+		expect(std.out).toMatchInlineSnapshot(`
+			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
+			Uploaded test-name (TIMINGS)
+			Published test-name (TIMINGS)
+			  https://test-name.test-sub-domain.workers.dev
+			  example.com/some-route/*
+			Current Deployment ID: Galaxy-Class
+			Current Version ID: Galaxy-Class
+
+
+			Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments"
+		`);
+		expect(std.err).toMatchInlineSnapshot(`""`);
+
+		const outputFilePaths = fs.readdirSync("output");
+
+		expect(outputFilePaths.length).toEqual(1);
+		expect(outputFilePaths[0]).toMatch(/wrangler-output-.+\.json/);
+		const outputFile = fs.readFileSync(
+			path.join("output", outputFilePaths[0]),
+			"utf8"
+		);
+		const entries = outputFile
+			.split("\n")
+			.filter(Boolean)
+			.map((e) => JSON.parse(e));
+
+		expect(entries.find((e) => e.type === "deploy")).toMatchObject({
+			targets: [
+				"https://test-name.test-sub-domain.workers.dev",
+				"example.com/some-route/*",
+			],
+			// Omitting timestamp for matching
+			// timestamp: ...
+			type: "deploy",
+			version: 1,
+			version_id: "Galaxy-Class",
+			worker_name: "test-name",
+			worker_tag: "tag:test-name",
+		});
+	});
+
+	it("should resolve wrangler.toml relative to the entrypoint", async () => {
+		fs.mkdirSync("./some-path/worker", { recursive: true });
+		fs.writeFileSync(
+			"./some-path/wrangler.toml",
+			TOML.stringify({
+				name: "test-name",
+				compatibility_date: "2022-01-12",
+				vars: { xyz: 123 },
+			}),
+			"utf-8"
+		);
+		writeWorkerSource({ basePath: "./some-path/worker" });
+		mockUploadWorkerRequest({
+			expectedBindings: [
+				{
+					json: 123,
+					name: "xyz",
+					type: "json",
+				},
+			],
+			expectedCompatibilityDate: "2022-01-12",
+		});
+		mockSubDomainRequest();
+		await runWrangler("deploy ./some-path/worker/index.js");
+		expect(std.out).toMatchInlineSnapshot(`
+		"Total Upload: xx KiB / gzip: xx KiB
+		Worker Startup Time: 100 ms
+		Your worker has access to the following bindings:
+		- Vars:
+		  - xyz: 123
+		Uploaded test-name (TIMINGS)
+		Published test-name (TIMINGS)
+		  https://test-name.test-sub-domain.workers.dev
+		Current Deployment ID: Galaxy-Class
+		Current Version ID: Galaxy-Class
+
+
+		Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments"
+	`);
+		expect(std.err).toMatchInlineSnapshot(`""`);
+	});
+
+	it("should support wrangler.json", async () => {
+		fs.mkdirSync("./my-worker", { recursive: true });
+		fs.writeFileSync(
+			"./wrangler.json",
+			JSON.stringify({
+				name: "test-worker",
+				compatibility_date: "2024-01-01",
+				vars: { xyz: 123 },
+			}),
+			"utf-8"
+		);
+		writeWorkerSource({ basePath: "./my-worker" });
+		mockUploadWorkerRequest({
+			expectedScriptName: "test-worker",
+			expectedBindings: [
+				{
+					json: 123,
+					name: "xyz",
+					type: "json",
+				},
+			],
+			expectedCompatibilityDate: "2024-01-01",
+		});
+		mockSubDomainRequest();
+
+		await runWrangler("deploy ./my-worker/index.js --experimental-json-config");
+		expect(std.out).toMatchInlineSnapshot(`
+			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
+			Your worker has access to the following bindings:
+			- Vars:
+			  - xyz: 123
+			Uploaded test-worker (TIMINGS)
+			Published test-worker (TIMINGS)
+			  https://test-worker.test-sub-domain.workers.dev
+			Current Deployment ID: Galaxy-Class
+			Current Version ID: Galaxy-Class
+
+
+			Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments"
+		`);
+		expect(std.err).toMatchInlineSnapshot(`""`);
+	});
+
+	it("should support wrangler.jsonc", async () => {
+		fs.mkdirSync("./my-worker", { recursive: true });
+		fs.writeFileSync(
+			"./wrangler.jsonc",
+			JSON.stringify({
+				name: "test-worker-jsonc",
+				compatibility_date: "2024-01-01",
+				vars: { xyz: 123 },
+			}),
+			"utf-8"
+		);
+		writeWorkerSource({ basePath: "./my-worker" });
+		mockUploadWorkerRequest({
+			expectedScriptName: "test-worker-jsonc",
+			expectedBindings: [
+				{
+					json: 123,
+					name: "xyz",
+					type: "json",
+				},
+			],
+			expectedCompatibilityDate: "2024-01-01",
+		});
+		mockSubDomainRequest();
+
+		await runWrangler("deploy ./my-worker/index.js --experimental-json-config");
+		expect(std.out).toMatchInlineSnapshot(`
+			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
+			Your worker has access to the following bindings:
+			- Vars:
+			  - xyz: 123
+			Uploaded test-worker-jsonc (TIMINGS)
+			Published test-worker-jsonc (TIMINGS)
+			  https://test-worker-jsonc.test-sub-domain.workers.dev
+			Current Deployment ID: Galaxy-Class
+			Current Version ID: Galaxy-Class
+
+
+			Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments"
+		`);
+		expect(std.err).toMatchInlineSnapshot(`""`);
+	});
+
+	it("should not deploy if there's any other kind of error when checking deployment source", async () => {
+		writeWorkerSource();
+		writeWranglerToml();
+		mockSubDomainRequest();
+		mockUploadWorkerRequest();
+		msw.use(...mswSuccessOauthHandlers, ...mswSuccessUserHandlers);
+		msw.use(
+			http.get("*/accounts/:accountId/workers/services/:scriptName", () => {
+				return HttpResponse.json(
+					createFetchResult(null, false, [
+						{ code: 10000, message: "Authentication error" },
+					])
+				);
+			}),
+			http.get(
+				"*/accounts/:accountId/workers/deployments/by-script/:scriptTag",
+				() => {
+					return HttpResponse.json(
+						createFetchResult({
+							latest: { number: "2" },
+						})
+					);
+				}
+			)
+		);
+
+		await expect(
+			runWrangler("deploy index.js")
+		).rejects.toThrowErrorMatchingInlineSnapshot(
+			`[APIError: A request to the Cloudflare API (/accounts/some-account-id/workers/services/test-name) failed.]`
+		);
+		expect(std.out).toMatchInlineSnapshot(`
+		"
+		[31mX [41;31m[[41;97mERROR[41;31m][0m [1mA request to the Cloudflare API (/accounts/some-account-id/workers/services/test-name) failed.[0m
+
+		  Authentication error [code: 10000]
+
+
+		📎 It looks like you are authenticating Wrangler via a custom API token set in an environment variable.
+		Please ensure it has the correct permissions for this operation.
+
+		Getting User settings...
+		ℹ️  The API Token is read from the CLOUDFLARE_API_TOKEN in your environment.
+		👋 You are logged in with an API Token, associated with the email user@example.com.
+		┌───────────────┬────────────┐
+		│ Account Name  │ Account ID │
+		├───────────────┼────────────┤
+		│ Account One   │ account-1  │
+		├───────────────┼────────────┤
+		│ Account Two   │ account-2  │
+		├───────────────┼────────────┤
+		│ Account Three │ account-3  │
+		└───────────────┴────────────┘
+		🔓 To see token permissions visit https://dash.cloudflare.com/profile/api-tokens."
+	`);
+	});
+
 	describe("output additional script information", () => {
 		it("for first party workers, it should print worker information at log level", async () => {
 			setIsTTY(false);
@@ -114,6 +359,7 @@ describe("deploy", () => {
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Worker ID:  abc12345
 			Worker ETag:  etag98765
 			Worker PipelineHash:  hash9999
@@ -154,9 +400,10 @@ describe("deploy", () => {
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Attempting to login via OAuth...
-			Opening a link in your default browser: https://dash.cloudflare.com/oauth2/auth?response_type=code&client_id=54d11594-84e4-41aa-b438-e81b8fa78ee7&redirect_uri=http%3A%2F%2Flocalhost%3A8976%2Foauth%2Fcallback&scope=account%3Aread%20user%3Aread%20workers%3Awrite%20workers_kv%3Awrite%20workers_routes%3Awrite%20workers_scripts%3Awrite%20workers_tail%3Aread%20d1%3Awrite%20pages%3Awrite%20zone%3Aread%20ssl_certs%3Awrite%20constellation%3Awrite%20ai%3Awrite%20queues%3Awrite%20offline_access&state=MOCK_STATE_PARAM&code_challenge=MOCK_CODE_CHALLENGE&code_challenge_method=S256
+			Opening a link in your default browser: https://dash.cloudflare.com/oauth2/auth?response_type=code&client_id=54d11594-84e4-41aa-b438-e81b8fa78ee7&redirect_uri=http%3A%2F%2Flocalhost%3A8976%2Foauth%2Fcallback&scope=account%3Aread%20user%3Aread%20workers%3Awrite%20workers_kv%3Awrite%20workers_routes%3Awrite%20workers_scripts%3Awrite%20workers_tail%3Aread%20d1%3Awrite%20pages%3Awrite%20zone%3Aread%20ssl_certs%3Awrite%20ai%3Awrite%20queues%3Awrite%20offline_access&state=MOCK_STATE_PARAM&code_challenge=MOCK_CODE_CHALLENGE&code_challenge_method=S256
 			Successfully logged in.
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -198,9 +445,10 @@ describe("deploy", () => {
 
 				expect(std.out).toMatchInlineSnapshot(`
 			"Attempting to login via OAuth...
-			Opening a link in your default browser: https://dash.staging.cloudflare.com/oauth2/auth?response_type=code&client_id=54d11594-84e4-41aa-b438-e81b8fa78ee7&redirect_uri=http%3A%2F%2Flocalhost%3A8976%2Foauth%2Fcallback&scope=account%3Aread%20user%3Aread%20workers%3Awrite%20workers_kv%3Awrite%20workers_routes%3Awrite%20workers_scripts%3Awrite%20workers_tail%3Aread%20d1%3Awrite%20pages%3Awrite%20zone%3Aread%20ssl_certs%3Awrite%20constellation%3Awrite%20ai%3Awrite%20queues%3Awrite%20offline_access&state=MOCK_STATE_PARAM&code_challenge=MOCK_CODE_CHALLENGE&code_challenge_method=S256
+			Opening a link in your default browser: https://dash.staging.cloudflare.com/oauth2/auth?response_type=code&client_id=54d11594-84e4-41aa-b438-e81b8fa78ee7&redirect_uri=http%3A%2F%2Flocalhost%3A8976%2Foauth%2Fcallback&scope=account%3Aread%20user%3Aread%20workers%3Awrite%20workers_kv%3Awrite%20workers_routes%3Awrite%20workers_scripts%3Awrite%20workers_tail%3Aread%20d1%3Awrite%20pages%3Awrite%20zone%3Aread%20ssl_certs%3Awrite%20ai%3Awrite%20queues%3Awrite%20offline_access&state=MOCK_STATE_PARAM&code_challenge=MOCK_CODE_CHALLENGE&code_challenge_method=S256
 			Successfully logged in.
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -228,6 +476,7 @@ describe("deploy", () => {
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -250,17 +499,8 @@ describe("deploy", () => {
 		});
 
 		describe("non-TTY", () => {
-			const ENV_COPY = process.env;
-
-			afterEach(() => {
-				process.env = ENV_COPY;
-			});
-
 			it("should not throw an error in non-TTY if 'CLOUDFLARE_API_TOKEN' & 'account_id' are in scope", async () => {
-				process.env = {
-					...process.env,
-					CLOUDFLARE_API_TOKEN: "123456789",
-				};
+				vi.stubEnv("CLOUDFLARE_API_TOKEN", "123456789");
 				setIsTTY(false);
 				writeWranglerToml({
 					account_id: "some-account-id",
@@ -274,6 +514,7 @@ describe("deploy", () => {
 
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -287,11 +528,8 @@ describe("deploy", () => {
 			});
 
 			it("should not throw an error if 'CLOUDFLARE_ACCOUNT_ID' & 'CLOUDFLARE_API_TOKEN' are in scope", async () => {
-				process.env = {
-					...process.env,
-					CLOUDFLARE_API_TOKEN: "hunter2",
-					CLOUDFLARE_ACCOUNT_ID: "some-account-id",
-				};
+				vi.stubEnv("CLOUDFLARE_API_TOKEN", "hunter2");
+				vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "some-account-id");
 				setIsTTY(false);
 				writeWranglerToml();
 				writeWorkerSource();
@@ -304,6 +542,7 @@ describe("deploy", () => {
 
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -318,11 +557,8 @@ describe("deploy", () => {
 
 			it("should throw an error in non-TTY & there is more than one account associated with API token", async () => {
 				setIsTTY(false);
-				process.env = {
-					...process.env,
-					CLOUDFLARE_API_TOKEN: "hunter2",
-					CLOUDFLARE_ACCOUNT_ID: undefined,
-				};
+				vi.stubEnv("CLOUDFLARE_API_TOKEN", "hunter2");
+				vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
 				writeWranglerToml({
 					account_id: undefined,
 				});
@@ -350,11 +586,8 @@ describe("deploy", () => {
 				writeWranglerToml({
 					account_id: undefined,
 				});
-				process.env = {
-					...process.env,
-					CLOUDFLARE_API_TOKEN: undefined,
-					CLOUDFLARE_ACCOUNT_ID: "badwolf",
-				};
+				vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
+				vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "badwolf");
 				writeWorkerSource();
 				mockSubDomainRequest();
 				mockUploadWorkerRequest();
@@ -377,11 +610,8 @@ describe("deploy", () => {
 				writeWranglerToml({
 					account_id: undefined,
 				});
-				process.env = {
-					...process.env,
-					CLOUDFLARE_API_TOKEN: "picard",
-					CLOUDFLARE_ACCOUNT_ID: undefined,
-				};
+				vi.stubEnv("CLOUDFLARE_API_TOKEN", "picard");
+				vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
 				writeWorkerSource();
 				mockSubDomainRequest();
 				mockUploadWorkerRequest();
@@ -452,6 +682,34 @@ describe("deploy", () => {
 			"
 		`);
 		});
+
+		it("should log esbuild warnings", async () => {
+			writeWranglerToml();
+			fs.writeFileSync(
+				"index.js",
+				dedent/* javascript */ `
+					export default {
+						fetch() {
+							return
+							new Response(dep);
+						}
+					}
+				`
+			);
+			mockSubDomainRequest();
+			mockUploadWorkerRequest();
+			await runWrangler("deploy ./index");
+
+			expect(std.warn).toMatchInlineSnapshot(`
+				"[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe following expression is not returned because of an automatically-inserted semicolon[0m [semicolon-after-return]
+
+				    index.js:3:8:
+				[37m      3 │     return[32m[37m
+				        ╵           [32m^[0m
+
+				"
+			`);
+		});
 	});
 
 	describe("environments", () => {
@@ -467,6 +725,7 @@ describe("deploy", () => {
 			await runWrangler("deploy index.js --env some-env");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name-some-env (TIMINGS)
 			Published test-name-some-env (TIMINGS)
 			  https://test-name-some-env.test-sub-domain.workers.dev
@@ -492,6 +751,7 @@ describe("deploy", () => {
 				await runWrangler("deploy index.js --legacy-env true");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -517,6 +777,7 @@ describe("deploy", () => {
 				await runWrangler("deploy index.js --env some-env --legacy-env true");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name-some-env (TIMINGS)
 			Published test-name-some-env (TIMINGS)
 			  https://test-name-some-env.test-sub-domain.workers.dev
@@ -542,6 +803,7 @@ describe("deploy", () => {
 				await runWrangler("deploy index.js --env some-env --legacy-env true");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name-some-env (TIMINGS)
 			Published test-name-some-env (TIMINGS)
 			  https://test-name-some-env.test-sub-domain.workers.dev
@@ -618,6 +880,7 @@ describe("deploy", () => {
 				await runWrangler("deploy index.js --legacy-env false");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -650,6 +913,7 @@ describe("deploy", () => {
 				await runWrangler("deploy index.js --env some-env --legacy-env false");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (some-env) (TIMINGS)
 			Published test-name (some-env) (TIMINGS)
 			  https://some-env.test-name.test-sub-domain.workers.dev
@@ -698,6 +962,7 @@ describe("deploy", () => {
 		await runWrangler("deploy ./some-path/worker/index.js");
 		expect(std.out).toMatchInlineSnapshot(`
 		"Total Upload: xx KiB / gzip: xx KiB
+		Worker Startup Time: 100 ms
 		Your worker has access to the following bindings:
 		- Vars:
 		  - xyz: 123
@@ -741,6 +1006,7 @@ describe("deploy", () => {
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -793,6 +1059,7 @@ describe("deploy", () => {
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  some-example.com/some-route/*
@@ -840,6 +1107,7 @@ describe("deploy", () => {
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  partner.com/* (zone name: owned-zone.com)
@@ -883,6 +1151,7 @@ describe("deploy", () => {
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  subdomain.partner.com/* (zone name: owned-zone.com)
@@ -946,6 +1215,7 @@ describe("deploy", () => {
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (staging) (TIMINGS)
 			Published test-name (staging) (TIMINGS)
 			  some-example.com/some-route/*
@@ -1057,6 +1327,7 @@ describe("deploy", () => {
 		`);
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  example.com/some-route/*
@@ -1344,6 +1615,7 @@ Update them to point to this script instead?`,
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1366,6 +1638,7 @@ Update them to point to this script instead?`,
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1388,6 +1661,7 @@ Update them to point to this script instead?`,
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1412,6 +1686,7 @@ Update them to point to this script instead?`,
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1434,6 +1709,7 @@ Update them to point to this script instead?`,
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1475,6 +1751,7 @@ Update them to point to this script instead?`,
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1530,6 +1807,7 @@ Update them to point to this script instead?`,
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1554,6 +1832,7 @@ Update them to point to this script instead?`,
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1590,6 +1869,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1620,6 +1900,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1642,6 +1923,7 @@ export default{
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1743,6 +2025,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1829,6 +2112,7 @@ addEventListener('fetch', event => {});`
 			Uploaded 100% [2 out of 2]",
 			  "out": "↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1890,6 +2174,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1951,7 +2236,7 @@ addEventListener('fetch', event => {});`
 		      `);
 		});
 
-		it("should not require an explicit entry point when using --assets", async () => {
+		it("should not require an explicit entry point when using --legacy-assets", async () => {
 			const assets = [
 				{ filePath: "file-1.txt", content: "Content of file-1" },
 				{ filePath: "file-2.txt", content: "Content of file-2" },
@@ -1969,38 +2254,41 @@ addEventListener('fetch', event => {});`
 			mockKeyListRequest(kvNamespace.id, []);
 			mockUploadAssetsToKVRequest(kvNamespace.id, assets);
 
-			await runWrangler("deploy --assets assets --latest --name test-name");
+			await runWrangler(
+				"deploy --legacy-assets assets --latest --name test-name"
+			);
 
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "",
-			  "info": "Fetching list of already uploaded assets...
-			Building list of assets to upload...
-			 + file-1.2ca234f380.txt (uploading new version of file-1.txt)
-			 + file-2.5938485188.txt (uploading new version of file-2.txt)
-			Uploading 2 new assets...
-			Uploaded 100% [2 out of 2]",
-			  "out": "↗️  Done syncing assets
-			Total Upload: xx KiB / gzip: xx KiB
-			Uploaded test-name (TIMINGS)
-			Published test-name (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Deployment ID: Galaxy-Class
-			Current Version ID: Galaxy-Class
+				Object {
+				  "debug": "",
+				  "err": "",
+				  "info": "Fetching list of already uploaded assets...
+				Building list of assets to upload...
+				 + file-1.2ca234f380.txt (uploading new version of file-1.txt)
+				 + file-2.5938485188.txt (uploading new version of file-2.txt)
+				Uploading 2 new assets...
+				Uploaded 100% [2 out of 2]",
+				  "out": "↗️  Done syncing assets
+				Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Uploaded test-name (TIMINGS)
+				Published test-name (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Deployment ID: Galaxy-Class
+				Current Version ID: Galaxy-Class
 
 
-			Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
-			  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --assets argument is experimental and may change or break at any time[0m
+				Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --legacy-assets argument is experimental and may change or break at any time.[0m
 
 
-			[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mUsing the latest version of the Workers runtime. To silence this warning, please choose a specific version of the runtime with --compatibility-date, or add a compatibility_date to your wrangler.toml.[0m
+				[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mUsing the latest version of the Workers runtime. To silence this warning, please choose a specific version of the runtime with --compatibility-date, or add a compatibility_date to your wrangler.toml.[0m
 
 
 
-			",
-			}
-		`);
+				",
+				}
+			`);
 		});
 
 		describe("should source map validation errors", () => {
@@ -2117,7 +2405,7 @@ addEventListener('fetch', event => {});`
 		});
 	});
 
-	describe("asset upload", () => {
+	describe("(legacy) asset upload", () => {
 		it("should upload all the files in the directory specified by `config.site.bucket`", async () => {
 			const assets = [
 				{ filePath: "file-1.txt", content: "Content of file-1" },
@@ -2153,6 +2441,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -2165,7 +2454,58 @@ addEventListener('fetch', event => {});`
 			expect(std.err).toMatchInlineSnapshot(`""`);
 		});
 
-		it("should upload all the files in the directory specified by `--assets`", async () => {
+		it("should upload all the files in the directory specified by `--legacy-assets`", async () => {
+			const assets = [
+				{ filePath: "file-1.txt", content: "Content of file-1" },
+				{ filePath: "file-2.txt", content: "Content of file-2" },
+			];
+			const kvNamespace = {
+				title: "__test-name-workers_sites_assets",
+				id: "__test-name-workers_sites_assets-id",
+			};
+			writeWranglerToml({
+				main: "./index.js",
+			});
+			writeWorkerSource();
+			writeAssets(assets);
+			mockUploadWorkerRequest({
+				expectedMainModule: "index.js",
+			});
+			mockSubDomainRequest();
+			mockListKVNamespacesRequest(kvNamespace);
+			mockKeyListRequest(kvNamespace.id, []);
+			mockUploadAssetsToKVRequest(kvNamespace.id, assets);
+			await runWrangler("deploy --legacy-assets assets");
+
+			expect(std).toMatchInlineSnapshot(`
+				Object {
+				  "debug": "",
+				  "err": "",
+				  "info": "Fetching list of already uploaded assets...
+				Building list of assets to upload...
+				 + file-1.2ca234f380.txt (uploading new version of file-1.txt)
+				 + file-2.5938485188.txt (uploading new version of file-2.txt)
+				Uploading 2 new assets...
+				Uploaded 100% [2 out of 2]",
+				  "out": "↗️  Done syncing assets
+				Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Uploaded test-name (TIMINGS)
+				Published test-name (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Deployment ID: Galaxy-Class
+				Current Version ID: Galaxy-Class
+
+
+				Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --legacy-assets argument is experimental and may change or break at any time.[0m
+
+				",
+				}
+			`);
+		});
+
+		it("should upload all the files in the directory specified by `--assets` as with `--legacy-assets`", async () => {
 			const assets = [
 				{ filePath: "file-1.txt", content: "Content of file-1" },
 				{ filePath: "file-2.txt", content: "Content of file-2" },
@@ -2189,83 +2529,92 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy --assets assets");
 
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "",
-			  "info": "Fetching list of already uploaded assets...
-			Building list of assets to upload...
-			 + file-1.2ca234f380.txt (uploading new version of file-1.txt)
-			 + file-2.5938485188.txt (uploading new version of file-2.txt)
-			Uploading 2 new assets...
-			Uploaded 100% [2 out of 2]",
-			  "out": "↗️  Done syncing assets
-			Total Upload: xx KiB / gzip: xx KiB
-			Uploaded test-name (TIMINGS)
-			Published test-name (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Deployment ID: Galaxy-Class
-			Current Version ID: Galaxy-Class
+				Object {
+				  "debug": "",
+				  "err": "",
+				  "info": "Fetching list of already uploaded assets...
+				Building list of assets to upload...
+				 + file-1.2ca234f380.txt (uploading new version of file-1.txt)
+				 + file-2.5938485188.txt (uploading new version of file-2.txt)
+				Uploading 2 new assets...
+				Uploaded 100% [2 out of 2]",
+				  "out": "↗️  Done syncing assets
+				Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Uploaded test-name (TIMINGS)
+				Published test-name (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Deployment ID: Galaxy-Class
+				Current Version ID: Galaxy-Class
 
 
-			Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
-			  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --assets argument is experimental and may change or break at any time[0m
+				Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --assets argument is experimental. We are going to be changing the behavior of this experimental command after August 15th.[0m
 
-			",
-			}
-		`);
+				  Releases of wrangler after this date will no longer support current functionality.
+				  Please shift to the --legacy-assets command to preserve the current functionality.
+
+
+				[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --assets argument is experimental and may change or break at any time[0m
+
+				",
+				}
+			`);
 		});
 
-		it("should error when trying to use --assets with a service-worker Worker", async () => {
+		it("should error when trying to use --legacy-assets with a service-worker Worker", async () => {
 			writeWranglerToml({
 				main: "./index.js",
 			});
 			writeWorkerSource({ type: "sw" });
 			await expect(
-				runWrangler("deploy --assets abc")
+				runWrangler("deploy --legacy-assets abc")
 			).rejects.toThrowErrorMatchingInlineSnapshot(
 				`[Error: You cannot use the service-worker format with an \`assets\` directory yet. For information on how to migrate to the module-worker format, see: https://developers.cloudflare.com/workers/learning/migrating-to-module-workers/]`
 			);
 
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mYou cannot use the service-worker format with an \`assets\` directory yet. For information on how to migrate to the module-worker format, see: https://developers.cloudflare.com/workers/learning/migrating-to-module-workers/[0m
+				Object {
+				  "debug": "",
+				  "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mYou cannot use the service-worker format with an \`assets\` directory yet. For information on how to migrate to the module-worker format, see: https://developers.cloudflare.com/workers/learning/migrating-to-module-workers/[0m
 
-			",
-			  "info": "",
-			  "out": "",
-			  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --assets argument is experimental and may change or break at any time[0m
+				",
+				  "info": "",
+				  "out": "",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --legacy-assets argument is experimental and may change or break at any time.[0m
 
-			",
-			}
-		`);
+				",
+				}
+			`);
 		});
 
-		it("should error if --assets and --site are used together", async () => {
+		it("should error if --legacy-assets and --site are used together", async () => {
 			writeWranglerToml({
 				main: "./index.js",
 			});
 			writeWorkerSource();
 			await expect(
-				runWrangler("deploy --assets abc --site xyz")
+				runWrangler("deploy --legacy-assets abc --site xyz")
 			).rejects.toThrowErrorMatchingInlineSnapshot(
 				`[Error: Cannot use Assets and Workers Sites in the same Worker.]`
 			);
 
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mCannot use Assets and Workers Sites in the same Worker.[0m
+				Object {
+				  "debug": "",
+				  "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mCannot use Assets and Workers Sites in the same Worker.[0m
 
-			",
-			  "info": "",
-			  "out": "",
-			  "warn": "",
-			}
-		`);
+				",
+				  "info": "",
+				  "out": "",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --legacy-assets argument is experimental and may change or break at any time.[0m
+
+				",
+				}
+			`);
 		});
 
-		it("should error if --assets and config.site are used together", async () => {
+		it("should error if --legacy-assets and config.site are used together", async () => {
 			writeWranglerToml({
 				main: "./index.js",
 				site: {
@@ -2274,28 +2623,30 @@ addEventListener('fetch', event => {});`
 			});
 			writeWorkerSource();
 			await expect(
-				runWrangler("deploy --assets abc")
+				runWrangler("deploy --legacy-assets abc")
 			).rejects.toThrowErrorMatchingInlineSnapshot(
 				`[Error: Cannot use Assets and Workers Sites in the same Worker.]`
 			);
 
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mCannot use Assets and Workers Sites in the same Worker.[0m
+				Object {
+				  "debug": "",
+				  "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mCannot use Assets and Workers Sites in the same Worker.[0m
 
-			",
-			  "info": "",
-			  "out": "",
-			  "warn": "",
-			}
-		`);
+				",
+				  "info": "",
+				  "out": "",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --legacy-assets argument is experimental and may change or break at any time.[0m
+
+				",
+				}
+			`);
 		});
 
-		it("should error if config.assets and --site are used together", async () => {
+		it("should error if config.legacy_assets and --site are used together", async () => {
 			writeWranglerToml({
 				main: "./index.js",
-				assets: "abc",
+				legacy_assets: "abc",
 			});
 			writeWorkerSource();
 			await expect(
@@ -2305,26 +2656,26 @@ addEventListener('fetch', event => {});`
 			);
 
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mCannot use Assets and Workers Sites in the same Worker.[0m
+				Object {
+				  "debug": "",
+				  "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mCannot use Assets and Workers Sites in the same Worker.[0m
 
-			",
-			  "info": "",
-			  "out": "",
-			  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mProcessing wrangler.toml configuration:[0m
+				",
+				  "info": "",
+				  "out": "",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mProcessing wrangler.toml configuration:[0m
 
-			    - \\"assets\\" fields are experimental and may change or break at any time.
+				    - \\"legacy_assets\\" fields are experimental and may change or break at any time.
 
-			",
-			}
-		`);
+				",
+				}
+			`);
 		});
 
-		it("should error if config.assets and config.site are used together", async () => {
+		it("should error if config.legacy_assets and config.site are used together", async () => {
 			writeWranglerToml({
 				main: "./index.js",
-				assets: "abc",
+				legacy_assets: "abc",
 				site: {
 					bucket: "xyz",
 				},
@@ -2337,23 +2688,23 @@ addEventListener('fetch', event => {});`
 			);
 
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mCannot use Assets and Workers Sites in the same Worker.[0m
+				Object {
+				  "debug": "",
+				  "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mCannot use Assets and Workers Sites in the same Worker.[0m
 
-			",
-			  "info": "",
-			  "out": "",
-			  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mProcessing wrangler.toml configuration:[0m
+				",
+				  "info": "",
+				  "out": "",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mProcessing wrangler.toml configuration:[0m
 
-			    - \\"assets\\" fields are experimental and may change or break at any time.
+				    - \\"legacy_assets\\" fields are experimental and may change or break at any time.
 
-			",
-			}
-		`);
+				",
+				}
+			`);
 		});
 
-		it("should warn if --assets is used", async () => {
+		it("should warn if --legacy-assets is used", async () => {
 			writeWranglerToml({
 				main: "./index.js",
 			});
@@ -2376,38 +2727,39 @@ addEventListener('fetch', event => {});`
 			mockKeyListRequest(kvNamespace.id, []);
 			mockUploadAssetsToKVRequest(kvNamespace.id, assets);
 
-			await runWrangler("deploy --assets ./assets");
+			await runWrangler("deploy --legacy-assets ./assets");
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "",
-			  "info": "Fetching list of already uploaded assets...
-			Building list of assets to upload...
-			 + subdir/file-1.2ca234f380.txt (uploading new version of subdir/file-1.txt)
-			 + subdir/file-2.5938485188.txt (uploading new version of subdir/file-2.txt)
-			Uploading 2 new assets...
-			Uploaded 100% [2 out of 2]",
-			  "out": "↗️  Done syncing assets
-			Total Upload: xx KiB / gzip: xx KiB
-			Uploaded test-name (TIMINGS)
-			Published test-name (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Deployment ID: Galaxy-Class
-			Current Version ID: Galaxy-Class
+				Object {
+				  "debug": "",
+				  "err": "",
+				  "info": "Fetching list of already uploaded assets...
+				Building list of assets to upload...
+				 + subdir/file-1.2ca234f380.txt (uploading new version of subdir/file-1.txt)
+				 + subdir/file-2.5938485188.txt (uploading new version of subdir/file-2.txt)
+				Uploading 2 new assets...
+				Uploaded 100% [2 out of 2]",
+				  "out": "↗️  Done syncing assets
+				Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Uploaded test-name (TIMINGS)
+				Published test-name (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Deployment ID: Galaxy-Class
+				Current Version ID: Galaxy-Class
 
 
-			Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
-			  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --assets argument is experimental and may change or break at any time[0m
+				Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --legacy-assets argument is experimental and may change or break at any time.[0m
 
-			",
-			}
-		`);
+				",
+				}
+			`);
 		});
 
-		it("should warn if config.assets is used", async () => {
+		it("should warn if config.legacy_assets is used", async () => {
 			writeWranglerToml({
 				main: "./index.js",
-				assets: "./assets",
+				legacy_assets: "./assets",
 			});
 			const assets = [
 				{ filePath: "subdir/file-1.txt", content: "Content of file-1" },
@@ -2430,32 +2782,33 @@ addEventListener('fetch', event => {});`
 
 			await runWrangler("deploy");
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "",
-			  "info": "Fetching list of already uploaded assets...
-			Building list of assets to upload...
-			 + subdir/file-1.2ca234f380.txt (uploading new version of subdir/file-1.txt)
-			 + subdir/file-2.5938485188.txt (uploading new version of subdir/file-2.txt)
-			Uploading 2 new assets...
-			Uploaded 100% [2 out of 2]",
-			  "out": "↗️  Done syncing assets
-			Total Upload: xx KiB / gzip: xx KiB
-			Uploaded test-name (TIMINGS)
-			Published test-name (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Deployment ID: Galaxy-Class
-			Current Version ID: Galaxy-Class
+				Object {
+				  "debug": "",
+				  "err": "",
+				  "info": "Fetching list of already uploaded assets...
+				Building list of assets to upload...
+				 + subdir/file-1.2ca234f380.txt (uploading new version of subdir/file-1.txt)
+				 + subdir/file-2.5938485188.txt (uploading new version of subdir/file-2.txt)
+				Uploading 2 new assets...
+				Uploaded 100% [2 out of 2]",
+				  "out": "↗️  Done syncing assets
+				Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Uploaded test-name (TIMINGS)
+				Published test-name (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Deployment ID: Galaxy-Class
+				Current Version ID: Galaxy-Class
 
 
-			Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
-			  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mProcessing wrangler.toml configuration:[0m
+				Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mProcessing wrangler.toml configuration:[0m
 
-			    - \\"assets\\" fields are experimental and may change or break at any time.
+				    - \\"legacy_assets\\" fields are experimental and may change or break at any time.
 
-			",
-			}
-		`);
+				",
+				}
+			`);
 		});
 
 		it("should not contain backslash for assets with nested directories", async () => {
@@ -2506,6 +2859,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -2572,6 +2926,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -2674,28 +3029,31 @@ addEventListener('fetch', event => {});`
 			Uploaded 100% [2 out of 2]"
 		`);
 			expect(std.out).toMatchInlineSnapshot(`
-			"┌─────────────┬──────┬──────────┐
-			│ Name        │ Type │ Size     │
-			├─────────────┼──────┼──────────┤
-			│ a/1.mjs     │ esm  │ xx KiB │
-			├─────────────┼──────┼──────────┤
-			│ a/b/2.mjs   │ esm  │ xx KiB │
-			├─────────────┼──────┼──────────┤
-			│ a/b/3.mjs   │ esm  │ xx KiB │
-			├─────────────┼──────┼──────────┤
-			│ a/b/c/4.mjs │ esm  │ xx KiB │
-			└─────────────┴──────┴──────────┘
-			↗️  Done syncing assets
-			Total Upload: xx KiB / gzip: xx KiB
-			Uploaded test-name (TIMINGS)
-			Published test-name (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Deployment ID: Galaxy-Class
-			Current Version ID: Galaxy-Class
+				"┌───────────────────┬──────┬──────────┐
+				│ Name              │ Type │ Size     │
+				├───────────────────┼──────┼──────────┤
+				│ a/1.mjs           │ esm  │ xx KiB │
+				├───────────────────┼──────┼──────────┤
+				│ a/b/2.mjs         │ esm  │ xx KiB │
+				├───────────────────┼──────┼──────────┤
+				│ a/b/3.mjs         │ esm  │ xx KiB │
+				├───────────────────┼──────┼──────────┤
+				│ a/b/c/4.mjs       │ esm  │ xx KiB │
+				├───────────────────┼──────┼──────────┤
+				│ Total (4 modules) │      │ xx KiB │
+				└───────────────────┴──────┴──────────┘
+				↗️  Done syncing assets
+				Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Uploaded test-name (TIMINGS)
+				Published test-name (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Deployment ID: Galaxy-Class
+				Current Version ID: Galaxy-Class
 
 
-			Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments"
-		`);
+				Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments"
+			`);
 			expect(std.err).toMatchInlineSnapshot(`""`);
 		});
 
@@ -2745,6 +3103,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (some-env) (TIMINGS)
 			Published test-name (some-env) (TIMINGS)
 			  https://some-env.test-name.test-sub-domain.workers.dev
@@ -2804,6 +3163,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name-some-env (TIMINGS)
 			Published test-name-some-env (TIMINGS)
 			  https://test-name-some-env.test-sub-domain.workers.dev
@@ -2848,6 +3208,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -2898,6 +3259,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -2948,6 +3310,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -2999,6 +3362,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -3050,6 +3414,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -3101,6 +3466,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -3152,6 +3518,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -3205,6 +3572,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -3262,6 +3630,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -3375,6 +3744,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -3517,6 +3887,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -3580,6 +3951,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -3628,6 +4000,7 @@ addEventListener('fetch', event => {});`
 			Uploaded 100% [2 out of 2]",
 			  "out": "↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -3641,7 +4014,7 @@ addEventListener('fetch', event => {});`
 		`);
 		});
 
-		it("should use the relative path from current working directory to Worker directory when using `--assets`", async () => {
+		it("should use the relative path from current working directory to Worker directory when using `--legacy-assets`", async () => {
 			const assets = [
 				{ filePath: "file-1.txt", content: "Content of file-1" },
 				{ filePath: "file-2.txt", content: "Content of file-2" },
@@ -3663,33 +4036,34 @@ addEventListener('fetch', event => {});`
 			mockKeyListRequest(kvNamespace.id, []);
 			mockUploadAssetsToKVRequest(kvNamespace.id, assets);
 			process.chdir("./my-assets");
-			await runWrangler("deploy --assets .");
+			await runWrangler("deploy --legacy-assets .");
 
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "",
-			  "info": "Fetching list of already uploaded assets...
-			Building list of assets to upload...
-			 + file-1.2ca234f380.txt (uploading new version of file-1.txt)
-			 + file-2.5938485188.txt (uploading new version of file-2.txt)
-			Uploading 2 new assets...
-			Uploaded 100% [2 out of 2]",
-			  "out": "↗️  Done syncing assets
-			Total Upload: xx KiB / gzip: xx KiB
-			Uploaded test-name (TIMINGS)
-			Published test-name (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Deployment ID: Galaxy-Class
-			Current Version ID: Galaxy-Class
+				Object {
+				  "debug": "",
+				  "err": "",
+				  "info": "Fetching list of already uploaded assets...
+				Building list of assets to upload...
+				 + file-1.2ca234f380.txt (uploading new version of file-1.txt)
+				 + file-2.5938485188.txt (uploading new version of file-2.txt)
+				Uploading 2 new assets...
+				Uploaded 100% [2 out of 2]",
+				  "out": "↗️  Done syncing assets
+				Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Uploaded test-name (TIMINGS)
+				Published test-name (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Deployment ID: Galaxy-Class
+				Current Version ID: Galaxy-Class
 
 
-			Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
-			  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --assets argument is experimental and may change or break at any time[0m
+				Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --legacy-assets argument is experimental and may change or break at any time.[0m
 
-			",
-			}
-		`);
+				",
+				}
+			`);
 		});
 
 		it("should abort other bucket uploads if one bucket upload fails", async () => {
@@ -3897,6 +4271,7 @@ addEventListener('fetch', event => {});`
 			Uploaded 100% [110 out of 110]",
 			  "out": "↗️  Done syncing assets
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -4041,6 +4416,412 @@ addEventListener('fetch', event => {});`
 		});
 	});
 
+	describe("--experimental-assets", () => {
+		it("should use the directory specified in the CLI over wrangler.toml", async () => {
+			const cliAssets = [
+				{ filePath: "cliAsset.txt", content: "Content of file-1" },
+			];
+			writeAssets(cliAssets, "cli-assets");
+			const configAssets = [
+				{ filePath: "configAsset.txt", content: "Content of file-2" },
+			];
+			writeAssets(configAssets, "config-assets");
+			writeWranglerToml({
+				experimental_assets: { directory: "config-assets" },
+			});
+			const bodies: AssetManifest[] = [];
+			await mockAUSRequest(bodies);
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({
+				expectedExperimentalAssets: true,
+				expectedType: "none",
+			});
+			await runWrangler("deploy --experimental-assets cli-assets");
+			expect(bodies.length).toBe(1);
+			expect(bodies[0]).toEqual({
+				manifest: {
+					"/cliAsset.txt": {
+						hash: "0de3dd5df907418e9730fd2bd747bd5e",
+						size: 17,
+					},
+				},
+			});
+		});
+
+		it("should error if config.site and config.experimental_assets are used together", async () => {
+			writeWranglerToml({
+				main: "./index.js",
+				experimental_assets: { directory: "abd" },
+				site: {
+					bucket: "xyz",
+				},
+			});
+			writeWorkerSource();
+			await expect(
+				runWrangler("deploy")
+			).rejects.toThrowErrorMatchingInlineSnapshot(
+				`[Error: Cannot use Assets and Workers Sites in the same Worker.]`
+			);
+		});
+
+		it("should error if --experimental-assets and config.site are used together", async () => {
+			writeWranglerToml({
+				main: "./index.js",
+				site: {
+					bucket: "xyz",
+				},
+			});
+			writeWorkerSource();
+			await expect(
+				runWrangler("deploy --experimental-assets abc")
+			).rejects.toThrowErrorMatchingInlineSnapshot(
+				`[Error: Cannot use Assets and Workers Sites in the same Worker.]`
+			);
+		});
+
+		it("should error if directory specified by flag --experimental-assets does not exist", async () => {
+			await expect(
+				runWrangler("deploy --experimental-assets abc")
+			).rejects.toThrow(
+				new RegExp(
+					'^The directory specified by the "--experimental-assets" command line argument does not exist:[Ss]*'
+				)
+			);
+		});
+
+		it("should error if directory specified by config experimental_assets does not exist", async () => {
+			writeWranglerToml({
+				experimental_assets: { directory: "abc" },
+			});
+			await expect(runWrangler("deploy")).rejects.toThrow(
+				new RegExp(
+					'^The directory specified by the "experimental_assets.directory" field in your configuration file does not exist:[Ss]*'
+				)
+			);
+		});
+
+		it("should encode file paths", async () => {
+			// NB windows will disallow these characters in file paths anyway < > : " / \ | ? *
+			const assets = [
+				{ filePath: "file-1.txt", content: "Content of file-1" },
+				{ filePath: "boop/file#1.txt", content: "Content of file-1" },
+				{ filePath: "béëp/boo^p.txt", content: "Content of file-1" },
+			];
+			writeAssets(assets);
+			writeWranglerToml({
+				experimental_assets: { directory: "assets" },
+			});
+
+			const bodies: AssetManifest[] = [];
+			await mockAUSRequest(bodies);
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({
+				expectedExperimentalAssets: true,
+				expectedType: "none",
+			});
+			await runWrangler("deploy");
+			expect(bodies.length).toBe(1);
+			expect(bodies[0]).toEqual({
+				manifest: {
+					"/b%C3%A9%C3%ABp/boo%5Ep.txt": {
+						hash: "0de3dd5df907418e9730fd2bd747bd5e",
+						size: 17,
+					},
+					"/boop/file%231.txt": {
+						hash: "0de3dd5df907418e9730fd2bd747bd5e",
+						size: 17,
+					},
+					"/file-1.txt": {
+						hash: "0de3dd5df907418e9730fd2bd747bd5e",
+						size: 17,
+					},
+				},
+			});
+		});
+
+		it("should resolve assets directory relative to wrangler.toml if using config", async () => {
+			const assets = [{ filePath: "file-1.txt", content: "Content of file-1" }];
+			writeAssets(assets, "some/path/assets");
+			writeWranglerToml(
+				{
+					experimental_assets: { directory: "assets" },
+				},
+				"some/path/wrangler.toml"
+			);
+			const bodies: AssetManifest[] = [];
+			await mockAUSRequest(bodies);
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({
+				expectedExperimentalAssets: true,
+				expectedType: "none",
+			});
+			await runWrangler("deploy --config some/path/wrangler.toml");
+			expect(bodies.length).toBe(1);
+			expect(bodies[0]).toEqual({
+				manifest: {
+					"/file-1.txt": {
+						hash: "0de3dd5df907418e9730fd2bd747bd5e",
+						size: 17,
+					},
+				},
+			});
+		});
+
+		it("should resolve assets directory relative to cwd if using cli", async () => {
+			const assets = [{ filePath: "file-1.txt", content: "Content of file-1" }];
+			writeAssets(assets, "some/path/assets");
+			const bodies: AssetManifest[] = [];
+			await mockAUSRequest(bodies);
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({
+				expectedExperimentalAssets: true,
+				expectedType: "none",
+			});
+			process.chdir("some/path");
+			await runWrangler(
+				"deploy --name test-name --compatibility-date 2024-07-31 --experimental-assets assets"
+			);
+			expect(bodies.length).toBe(1);
+			expect(bodies[0]).toEqual({
+				manifest: {
+					"/file-1.txt": {
+						hash: "0de3dd5df907418e9730fd2bd747bd5e",
+						size: 17,
+					},
+				},
+			});
+		});
+
+		it("should upload an asset manifest of the files in the directory specified by --experimental-assets", async () => {
+			const assets = [
+				{ filePath: "file-1.txt", content: "Content of file-1" },
+				{ filePath: "boop/file-2.txt", content: "Content of file-2" },
+			];
+			writeAssets(assets);
+			const bodies: AssetManifest[] = [];
+			await mockAUSRequest(bodies);
+			// skips asset uploading since empty buckets returned
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({
+				expectedExperimentalAssets: true,
+				expectedType: "none",
+			});
+			await runWrangler(
+				"deploy --name test-name --compatibility-date 2024-07-31 --experimental-assets assets"
+			);
+			expect(bodies.length).toBe(1);
+			expect(bodies[0]).toStrictEqual({
+				manifest: {
+					"/file-1.txt": {
+						hash: "0de3dd5df907418e9730fd2bd747bd5e",
+						size: 17,
+					},
+					"/boop/file-2.txt": {
+						hash: "7574a8cd3094a050388ac9663af1c1d6",
+						size: 17,
+					},
+				},
+			});
+		});
+
+		it("should upload an asset manifest of the files in the directory specified by [experimental_assets] config", async () => {
+			const assets = [
+				{ filePath: "file-1.txt", content: "Content of file-1" },
+				{ filePath: "boop/file-2.txt", content: "Content of file-2" },
+			];
+			writeAssets(assets);
+			writeWranglerToml({
+				experimental_assets: { directory: "assets" },
+			});
+			const bodies: AssetManifest[] = [];
+			await mockAUSRequest(bodies);
+			// skips asset uploading since empty buckets returned
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({
+				expectedExperimentalAssets: true,
+				expectedType: "none",
+			});
+			await runWrangler("deploy");
+			expect(bodies.length).toBe(1);
+			expect(bodies[0]).toStrictEqual({
+				manifest: {
+					"/file-1.txt": {
+						hash: "0de3dd5df907418e9730fd2bd747bd5e",
+						size: 17,
+					},
+					"/boop/file-2.txt": {
+						hash: "7574a8cd3094a050388ac9663af1c1d6",
+						size: 17,
+					},
+				},
+			});
+		});
+
+		it("should upload assets in the requested buckets", async () => {
+			const assets = [
+				{ filePath: "file-1.txt", content: "Content of file-1" },
+				{ filePath: "boop/file-2.txt", content: "Content of file-2" },
+				{ filePath: "boop/file-3.txt", content: "Content of file-3" },
+				{ filePath: "file-4.txt", content: "Content of file-4" },
+				{ filePath: "beep/file-5.txt", content: "Content of file-5" },
+				{
+					filePath: "beep/boop/beep/boop/file-6.txt",
+					content: "Content of file-6",
+				},
+			];
+			writeAssets(assets);
+			writeWranglerToml({
+				experimental_assets: { directory: "assets" },
+			});
+			const bodies: UploadPayloadFile[][] = [];
+			const mockBuckets = [
+				[
+					"0de3dd5df907418e9730fd2bd747bd5e",
+					"7574a8cd3094a050388ac9663af1c1d6",
+				],
+				["ff5016e92f039aa743a4ff7abb3180fa"],
+				["f05e28a3d0bdb90d3cf4bdafe592488f"],
+				["0de3dd5df907418e9730fd2bd747bd5e"],
+			];
+			const uploadAuthHeaders: (string | null)[] = [];
+			const uploadContentTypeHeaders: (string | null)[] = [];
+			msw.use(
+				http.post(
+					`*/accounts/some-account-id/workers/scripts/test-name/assets-upload-session`,
+					async () => {
+						return HttpResponse.json(
+							{
+								success: true,
+								errors: [],
+								messages: [],
+								result: {
+									jwt: "<<aus-token>>",
+									buckets: mockBuckets,
+								},
+							},
+							{ status: 201 }
+						);
+					}
+				),
+				http.post(
+					"*/accounts/some-account-id/workers/assets/upload",
+					async ({ request }) => {
+						uploadContentTypeHeaders.push(request.headers.get("Content-Type"));
+						uploadAuthHeaders.push(request.headers.get("Authorization"));
+						const body = (await request.text())
+							.split("\n")
+							.map((x) => JSON.parse(x)) as UploadPayloadFile[];
+						bodies.push(body);
+						if (bodies.length === mockBuckets.length) {
+							return HttpResponse.json(
+								{
+									success: true,
+									errors: [],
+									messages: [],
+									result: { jwt: "<<aus-completion-token>>" },
+								},
+								{ status: 201 }
+							);
+						}
+
+						return HttpResponse.json(
+							{
+								success: true,
+								errors: [],
+								messages: [],
+								result: {},
+							},
+							{ status: 202 }
+						);
+					}
+				)
+			);
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({
+				expectedExperimentalAssets: true,
+				expectedType: "none",
+			});
+			await runWrangler("deploy");
+			expect(uploadAuthHeaders).toStrictEqual([
+				"Bearer <<aus-token>>",
+				"Bearer <<aus-token>>",
+				"Bearer <<aus-token>>",
+				"Bearer <<aus-token>>",
+			]);
+			expect(uploadContentTypeHeaders).toStrictEqual([
+				"application/jsonl",
+				"application/jsonl",
+				"application/jsonl",
+				"application/jsonl",
+			]);
+			expect(bodies.map((b) => b.length).sort()).toEqual([1, 1, 1, 2]);
+			expect(bodies.flatMap((b) => b)).toEqual(
+				expect.arrayContaining([
+					{
+						base64: true,
+						value: "Q29udGVudCBvZiBmaWxlLTE=",
+						key: "0de3dd5df907418e9730fd2bd747bd5e",
+						metadata: {
+							contentType: "text/plain",
+						},
+					},
+					{
+						base64: true,
+						value: "Q29udGVudCBvZiBmaWxlLTI=",
+						key: "7574a8cd3094a050388ac9663af1c1d6",
+						metadata: {
+							contentType: "text/plain",
+						},
+					},
+					{
+						base64: true,
+						value: "Q29udGVudCBvZiBmaWxlLTM=",
+						key: "ff5016e92f039aa743a4ff7abb3180fa",
+						metadata: {
+							contentType: "text/plain",
+						},
+					},
+					{
+						base64: true,
+						value: "Q29udGVudCBvZiBmaWxlLTU=",
+						key: "f05e28a3d0bdb90d3cf4bdafe592488f",
+						metadata: {
+							contentType: "text/plain",
+						},
+					},
+					{
+						base64: true,
+						value: "Q29udGVudCBvZiBmaWxlLTE=",
+						key: "0de3dd5df907418e9730fd2bd747bd5e",
+						metadata: {
+							contentType: "text/plain",
+						},
+					},
+				])
+			);
+		});
+		it("should be able to upload a user worker with ASSETS binding", async () => {
+			const assets = [
+				{ filePath: "file-1.txt", content: "Content of file-1" },
+				{ filePath: "boop/file-2.txt", content: "Content of file-2" },
+			];
+			writeAssets(assets);
+			writeWorkerSource({ format: "js" });
+			writeWranglerToml({
+				main: "index.js",
+				experimental_assets: { directory: "assets", binding: "ASSETS" },
+			});
+			await mockAUSRequest();
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({
+				expectedExperimentalAssets: true,
+				expectedBindings: [{ name: "ASSETS", type: "assets" }],
+				expectedMainModule: "index.js",
+			});
+			await runWrangler("deploy");
+		});
+	});
+
 	describe("workers_dev setting", () => {
 		it("should deploy to a workers.dev domain if workers_dev is undefined", async () => {
 			writeWranglerToml();
@@ -4052,6 +4833,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -4077,6 +4859,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -4101,6 +4884,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -4125,6 +4909,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			No deploy targets for test-name (TIMINGS)
 			Current Deployment ID: Galaxy-Class
@@ -4150,6 +4935,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			No deploy targets for test-name (TIMINGS)
 			Current Deployment ID: Galaxy-Class
@@ -4179,6 +4965,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (dev) (TIMINGS)
 			No deploy targets for test-name (dev) (TIMINGS)
 			Current Deployment ID: Galaxy-Class
@@ -4209,6 +4996,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (dev) (TIMINGS)
 			No deploy targets for test-name (dev) (TIMINGS)
 			Current Deployment ID: Galaxy-Class
@@ -4239,6 +5027,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (dev) (TIMINGS)
 			Published test-name (dev) (TIMINGS)
 			  https://dev.test-name.test-sub-domain.workers.dev
@@ -4271,6 +5060,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (dev) (TIMINGS)
 			Published test-name (dev) (TIMINGS)
 			  https://dev.test-name.test-sub-domain.workers.dev
@@ -4304,6 +5094,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (dev) (TIMINGS)
 			Published test-name (dev) (TIMINGS)
 			  https://dev.test-name.test-sub-domain.workers.dev
@@ -4340,6 +5131,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (dev) (TIMINGS)
 			Published test-name (dev) (TIMINGS)
 			  https://dev.test-name.test-sub-domain.workers.dev
@@ -4378,6 +5170,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (dev) (TIMINGS)
 			Published test-name (dev) (TIMINGS)
 			  https://dev.test-name.test-sub-domain.workers.dev
@@ -4443,6 +5236,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -4466,6 +5260,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -4546,6 +5341,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  http://example.com/*
@@ -4585,6 +5381,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name-production (TIMINGS)
 			Published test-name-production (TIMINGS)
 			  http://production.example.com/*
@@ -4623,6 +5420,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name-production (TIMINGS)
 			Published test-name-production (TIMINGS)
 			  http://production.example.com/*
@@ -4654,6 +5452,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -4694,6 +5493,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name-production (TIMINGS)
 			Published test-name-production (TIMINGS)
 			  https://test-name-production.test-sub-domain.workers.dev
@@ -4734,6 +5534,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name-production (TIMINGS)
 			Published test-name-production (TIMINGS)
 			  https://test-name-production.test-sub-domain.workers.dev
@@ -4774,6 +5575,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name-production (TIMINGS)
 			Published test-name-production (TIMINGS)
 			  http://production.example.com/*
@@ -4813,6 +5615,7 @@ addEventListener('fetch', event => {});`
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name-production (TIMINGS)
 			Published test-name-production (TIMINGS)
 			  http://production.example.com/*
@@ -4947,6 +5750,7 @@ addEventListener('fetch', event => {});`
 			);
 		});
 	});
+
 	describe("custom builds", () => {
 		beforeEach(() => {
 			vi.unstubAllGlobals();
@@ -4967,6 +5771,7 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 			"Running custom build: node -e \\"4+4; require('fs').writeFileSync('index.js', 'export default { fetch(){ return new Response(123) } }')\\"
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -4997,6 +5802,7 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 			"Running custom build: echo \\"export default { fetch(){ return new Response(123) } }\\" > index.js
 			Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -5106,6 +5912,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js --minify");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -5150,6 +5957,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy -e testEnv index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (testEnv) (TIMINGS)
 			Published test-name (testEnv) (TIMINGS)
 			  https://testEnv.test-name.test-sub-domain.workers.dev
@@ -5179,6 +5987,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Durable Objects:
 			  - SOMENAME: SomeClass
@@ -5234,6 +6043,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Durable Objects:
 			  - SOMENAME: SomeClass (defined in some-script)
@@ -5282,6 +6092,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Durable Objects:
 			  - SOMENAME: SomeClass
@@ -5339,6 +6150,7 @@ addEventListener('fetch', event => {});`
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Durable Objects:
 			  - SOMENAME: SomeClass
@@ -5389,6 +6201,7 @@ addEventListener('fetch', event => {});`
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Durable Objects:
 			  - SOMENAME: SomeClass
@@ -5440,6 +6253,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js --legacy-env false");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Durable Objects:
 			  - SOMENAME: SomeClass
@@ -5508,6 +6322,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js --legacy-env false --env xyz");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Durable Objects:
 			  - SOMENAME: SomeClass
@@ -5575,6 +6390,7 @@ addEventListener('fetch', event => {});`
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Durable Objects:
 			  - SOMENAME: SomeClass
@@ -5650,6 +6466,7 @@ addEventListener('fetch', event => {});`
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Durable Objects:
 			  - SOMENAME: SomeClass
@@ -5694,6 +6511,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("publish index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -5721,6 +6539,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("publish index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -5949,6 +6768,7 @@ addEventListener('fetch', event => {});`
 			await expect(runWrangler("deploy index.js")).resolves.toBeUndefined();
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Data Blobs:
 			  - DATA_BLOB_ONE: some-data-blob.bin
@@ -6401,6 +7221,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Wasm Modules:
 			  - TESTWASMNAME: path/to/test.wasm
@@ -6473,6 +7294,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js --config ./path/to/wrangler.toml");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Wasm Modules:
 			  - TESTWASMNAME: path/to/and/the/path/to/test.wasm
@@ -6514,6 +7336,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -6553,6 +7376,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Text Blobs:
 			  - TESTTEXTBLOBNAME: path/to/text.file
@@ -6629,6 +7453,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js --config ./path/to/wrangler.toml");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Text Blobs:
 			  - TESTTEXTBLOBNAME: path/to/and/the/path/to/text.file
@@ -6671,6 +7496,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Data Blobs:
 			  - TESTDATABLOBNAME: path/to/data.bin
@@ -6747,6 +7573,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js --config ./path/to/wrangler.toml");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Data Blobs:
 			  - TESTDATABLOBNAME: path/to/and/the/path/to/data.bin
@@ -6790,6 +7617,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Vars:
 			  - text: \\"plain ol' string\\"
@@ -6823,6 +7651,7 @@ addEventListener('fetch', event => {});`
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Vars:
 			  - TEXT: \\"(hidden)\\"
@@ -6857,6 +7686,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- R2 Buckets:
 			  - FOO: foo-bucket
@@ -6910,6 +7740,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- logfwdr:
 			  - httplogs: httplogs
@@ -6987,6 +7818,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Durable Objects:
 			  - EXAMPLE_DO_BINDING: ExampleDurableObject
@@ -7032,6 +7864,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Durable Objects:
 			  - EXAMPLE_DO_BINDING: ExampleDurableObject (defined in example-do-binding-worker)
@@ -7082,6 +7915,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Durable Objects:
 			  - EXAMPLE_DO_BINDING: ExampleDurableObject
@@ -7208,6 +8042,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Services:
 			  - FOO: foo-service - production
@@ -7252,6 +8087,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Services:
 			  - FOO: foo-service - production (#MyHandler)
@@ -7287,6 +8123,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Analytics Engine Datasets:
 			  - FOO: foo-dataset
@@ -7328,6 +8165,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- dispatch namespaces:
 			  - foo: Foo
@@ -7389,6 +8227,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("publish index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- dispatch namespaces:
 			  - foo: Foo (outbound -> foo_outbound)
@@ -7449,6 +8288,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("publish index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- dispatch namespaces:
 			  - foo: Foo (outbound -> foo_outbound)
@@ -7502,6 +8342,7 @@ addEventListener('fetch', event => {});`
 					await runWrangler("deploy index.js");
 					expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
 				Your worker has access to the following bindings:
 				- Unsafe Metadata:
 				  - stringify: true
@@ -7546,6 +8387,7 @@ addEventListener('fetch', event => {});`
 					await runWrangler("deploy index.js");
 					expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
 				Your worker has access to the following bindings:
 				- Unsafe:
 				  - binding-type: my-binding
@@ -7596,6 +8438,7 @@ addEventListener('fetch', event => {});`
 					await runWrangler("deploy index.js");
 					expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
 				Your worker has access to the following bindings:
 				- Unsafe:
 				  - plain_text: my-binding
@@ -7642,6 +8485,7 @@ addEventListener('fetch', event => {});`
 					await runWrangler("deploy index.js");
 					expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
 				Uploaded test-name (TIMINGS)
 				Published test-name (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -7749,6 +8593,7 @@ addEventListener('fetch', event => {});`
 					await runWrangler("deploy index.js");
 					expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
 				Uploaded test-name (TIMINGS)
 				Published test-name (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -7796,6 +8641,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -7830,6 +8676,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -7868,6 +8715,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -7922,6 +8770,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8025,6 +8874,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8059,6 +8909,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8073,14 +8924,10 @@ addEventListener('fetch', event => {});`
 		});
 
 		describe("inject process.env.NODE_ENV", () => {
-			let actualProcessEnvNodeEnv: string | undefined;
 			beforeEach(() => {
-				actualProcessEnvNodeEnv = process.env.NODE_ENV;
-				process.env.NODE_ENV = "some-node-env";
+				vi.stubEnv("NODE_ENV", "some-node-env");
 			});
-			afterEach(() => {
-				process.env.NODE_ENV = actualProcessEnvNodeEnv;
-			});
+
 			it("should replace `process.env.NODE_ENV` in scripts", async () => {
 				writeWranglerToml();
 				fs.writeFileSync(
@@ -8098,6 +8945,7 @@ addEventListener('fetch', event => {});`
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8133,6 +8981,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8167,6 +9016,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8203,6 +9053,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8237,6 +9088,7 @@ addEventListener('fetch', event => {});`
 			);
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8284,6 +9136,7 @@ addEventListener('fetch', event => {});`
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8339,6 +9192,7 @@ addEventListener('fetch', event => {});`
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8368,6 +9222,7 @@ addEventListener('fetch', event => {});`
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8398,34 +9253,37 @@ addEventListener('fetch', event => {});`
 			mockListKVNamespacesRequest(kvNamespace);
 			mockKeyListRequest(kvNamespace.id, []);
 			mockUploadAssetsToKVRequest(kvNamespace.id, assets);
-			await runWrangler("deploy index.js --outdir some-dir --assets assets");
+			await runWrangler(
+				"deploy index.js --outdir some-dir --legacy-assets assets"
+			);
 			expect(fs.existsSync("some-dir/index.js")).toBe(true);
 			expect(fs.existsSync("some-dir/index.js.map")).toBe(true);
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "",
-			  "info": "Fetching list of already uploaded assets...
-			Building list of assets to upload...
-			 + file-1.2ca234f380.txt (uploading new version of file-1.txt)
-			 + file-2.5938485188.txt (uploading new version of file-2.txt)
-			Uploading 2 new assets...
-			Uploaded 100% [2 out of 2]",
-			  "out": "↗️  Done syncing assets
-			Total Upload: xx KiB / gzip: xx KiB
-			Uploaded test-name (TIMINGS)
-			Published test-name (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Deployment ID: Galaxy-Class
-			Current Version ID: Galaxy-Class
+				Object {
+				  "debug": "",
+				  "err": "",
+				  "info": "Fetching list of already uploaded assets...
+				Building list of assets to upload...
+				 + file-1.2ca234f380.txt (uploading new version of file-1.txt)
+				 + file-2.5938485188.txt (uploading new version of file-2.txt)
+				Uploading 2 new assets...
+				Uploaded 100% [2 out of 2]",
+				  "out": "↗️  Done syncing assets
+				Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Uploaded test-name (TIMINGS)
+				Published test-name (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Deployment ID: Galaxy-Class
+				Current Version ID: Galaxy-Class
 
 
-			Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
-			  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --assets argument is experimental and may change or break at any time[0m
+				Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --legacy-assets argument is experimental and may change or break at any time.[0m
 
-			",
-			}
-		`);
+				",
+				}
+			`);
 		});
 
 		it("should copy any module imports related assets to --outdir if specified", async () => {
@@ -8475,6 +9333,7 @@ export default{
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8508,7 +9367,7 @@ export default{
       	};
 				export class SomeClass {};`
 			);
-			process.env.CLOUDFLARE_ACCOUNT_ID = "";
+			vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
 			await runWrangler("deploy index.js --dry-run");
 			expect(std).toMatchInlineSnapshot(`
 			Object {
@@ -8713,6 +9572,7 @@ export default{
 			  "err": "",
 			  "info": "",
 			  "out": "Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -8737,7 +9597,7 @@ export default{
 							{
 								code: 11337,
 								message:
-									"Script startup timed out. This could be due to script exceeding size limits or expensive code in the global scope.",
+									"Worker Startup Timed out. This could be due to script exceeding size limits or expensive code in the global scope.",
 							},
 						])
 					);
@@ -8781,7 +9641,7 @@ export default{
 
 			[31mX [41;31m[[41;97mERROR[41;31m][0m [1mA request to the Cloudflare API (/accounts/some-account-id/workers/scripts/test-name) failed.[0m
 
-			  Script startup timed out. This could be due to script exceeding size limits or expensive code in
+			  Worker Startup Timed out. This could be due to script exceeding size limits or expensive code in
 			  the global scope. [code: 11337]
 
 			  If you think this is a bug, please open an issue at:
@@ -8937,35 +9797,7 @@ export default{
 			// keeping these as unit tests to try and keep them snappy, as they often deal with
 			// big files that would take a while to deal with in a full wrangler test
 
-			test("should print the bundle size and warn about large scripts when > 1MiB", async () => {
-				const bigModule = Buffer.alloc(10_000_000);
-				randomFillSync(bigModule);
-				await printBundleSize({ name: "index.js", content: "" }, [
-					{
-						name: "index.js",
-						filePath: undefined,
-						content: bigModule,
-						type: "buffer",
-					},
-				]);
-
-				expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "",
-			  "info": "",
-			  "out": "Total Upload: xx KiB / gzip: xx KiB",
-			  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mWe recommend keeping your script less than 1MiB (1024 KiB) after gzip. Exceeding this can affect cold start time. Consider using Wrangler's \`--minify\` option to reduce your bundle size.[0m
-
-			",
-			}
-		`);
-			});
-
-			test("should not warn about bundle sizes when NO_SCRIPT_SIZE_WARNING is set", async () => {
-				const previousValue = process.env.NO_SCRIPT_SIZE_WARNING;
-				process.env.NO_SCRIPT_SIZE_WARNING = "true";
-
+			test("should print the bundle size", async () => {
 				const bigModule = Buffer.alloc(10_000_000);
 				randomFillSync(bigModule);
 				await printBundleSize({ name: "index.js", content: "" }, [
@@ -8986,8 +9818,6 @@ export default{
 			  "warn": "",
 			}
 		`);
-
-				process.env.NO_SCRIPT_SIZE_WARNING = previousValue;
 			});
 
 			test("should print the top biggest dependencies in the bundle when upload fails", () => {
@@ -9100,10 +9930,10 @@ export default{
 				"deploy index.js --no-bundle --node-compat --dry-run --outdir dist"
 			);
 			expect(std.warn).toMatchInlineSnapshot(`
-				"[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mEnabling Wrangler compile-time Node.js compatibility polyfill mode for builtins and globals. This is experimental and has serious tradeoffs.[0m
+				"[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1m\`--node-compat\` and \`--no-bundle\` can't be used together. If you want to polyfill Node.js built-ins and disable Wrangler's bundling, please polyfill as part of your own bundling process.[0m
 
 
-				[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1m\`--node-compat\` and \`--no-bundle\` can't be used together. If you want to polyfill Node.js built-ins and disable Wrangler's bundling, please polyfill as part of your own bundling process.[0m
+				[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mEnabling Wrangler compile-time Node.js compatibility polyfill mode for builtins and globals. This is experimental and has serious tradeoffs.[0m
 
 				"
 			`);
@@ -9120,71 +9950,14 @@ export default{
 			fs.writeFileSync("index.js", scriptContent);
 			await runWrangler("deploy index.js --dry-run --outdir dist");
 			expect(std.warn).toMatchInlineSnapshot(`
-				"[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mEnabling Wrangler compile-time Node.js compatibility polyfill mode for builtins and globals. This is experimental and has serious tradeoffs.[0m
+				"[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1m\`--node-compat\` and \`--no-bundle\` can't be used together. If you want to polyfill Node.js built-ins and disable Wrangler's bundling, please polyfill as part of your own bundling process.[0m
 
 
-				[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1m\`--node-compat\` and \`--no-bundle\` can't be used together. If you want to polyfill Node.js built-ins and disable Wrangler's bundling, please polyfill as part of your own bundling process.[0m
+				[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mEnabling Wrangler compile-time Node.js compatibility polyfill mode for builtins and globals. This is experimental and has serious tradeoffs.[0m
 
 				"
 			`);
 		});
-	});
-
-	it("should not deploy if there's any other kind of error when checking deployment source", async () => {
-		writeWorkerSource();
-		writeWranglerToml();
-		mockSubDomainRequest();
-		mockUploadWorkerRequest();
-		msw.use(...mswSuccessOauthHandlers, ...mswSuccessUserHandlers);
-		msw.use(
-			http.get("*/accounts/:accountId/workers/services/:scriptName", () => {
-				return HttpResponse.json(
-					createFetchResult(null, false, [
-						{ code: 10000, message: "Authentication error" },
-					])
-				);
-			}),
-			http.get(
-				"*/accounts/:accountId/workers/deployments/by-script/:scriptTag",
-				() => {
-					return HttpResponse.json(
-						createFetchResult({
-							latest: { number: "2" },
-						})
-					);
-				}
-			)
-		);
-
-		await expect(
-			runWrangler("deploy index.js")
-		).rejects.toThrowErrorMatchingInlineSnapshot(
-			`[APIError: A request to the Cloudflare API (/accounts/some-account-id/workers/services/test-name) failed.]`
-		);
-		expect(std.out).toMatchInlineSnapshot(`
-		"
-		[31mX [41;31m[[41;97mERROR[41;31m][0m [1mA request to the Cloudflare API (/accounts/some-account-id/workers/services/test-name) failed.[0m
-
-		  Authentication error [code: 10000]
-
-
-		📎 It looks like you are authenticating Wrangler via a custom API token set in an environment variable.
-		Please ensure it has the correct permissions for this operation.
-
-		Getting User settings...
-		👋 You are logged in with an API Token, associated with the email user@example.com!
-		ℹ️  The API Token is read from the CLOUDFLARE_API_TOKEN in your environment.
-		┌───────────────┬────────────┐
-		│ Account Name  │ Account ID │
-		├───────────────┼────────────┤
-		│ Account One   │ account-1  │
-		├───────────────┼────────────┤
-		│ Account Two   │ account-2  │
-		├───────────────┼────────────┤
-		│ Account Three │ account-3  │
-		└───────────────┴────────────┘
-		🔓 To see token permissions visit https://dash.cloudflare.com/profile/api-tokens"
-	`);
 	});
 
 	describe("queues", () => {
@@ -9226,6 +9999,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Queues:
 			  - QUEUE_ONE: queue1
@@ -9276,6 +10050,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Queues:
 			  - MY_QUEUE: queue1
@@ -9334,6 +10109,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -9390,6 +10166,7 @@ export default{
 			await runWrangler(`deploy index.js --name ${expectedScriptName}`);
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
 				Uploaded command-line-arg-script-name (TIMINGS)
 				Published command-line-arg-script-name (TIMINGS)
 				  https://command-line-arg-script-name.test-sub-domain.workers.dev
@@ -9453,6 +10230,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -9521,6 +10299,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -9576,6 +10355,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -9639,6 +10419,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -9702,6 +10483,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -9766,6 +10548,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -9830,6 +10613,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -10048,6 +10832,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Browser:
 			  - Name: MYBROWSER
@@ -10069,6 +10854,7 @@ export default{
 		it("should upload python module defined in wrangler.toml", async () => {
 			writeWranglerToml({
 				main: "index.py",
+				compatibility_flags: ["python_workers"],
 			});
 			await fs.promises.writeFile(
 				"index.py",
@@ -10086,25 +10872,30 @@ export default{
 					".wrangler/tmp/deploy/index.py"
 				)
 			).toMatchInlineSnapshot(`
-			"┌──────────────────────────────────────┬────────┬──────────┐
-			│ Name                                 │ Type   │ Size     │
-			├──────────────────────────────────────┼────────┼──────────┤
-			│ .wrangler/tmp/deploy/index.py │ python │ xx KiB │
-			└──────────────────────────────────────┴────────┴──────────┘
-			Total Upload: xx KiB / gzip: xx KiB
-			Uploaded test-name (TIMINGS)
-			Published test-name (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Deployment ID: Galaxy-Class
-			Current Version ID: Galaxy-Class
+				"┌──────────────────────────────────────┬────────┬──────────┐
+				│ Name                                 │ Type   │ Size     │
+				├──────────────────────────────────────┼────────┼──────────┤
+				│ .wrangler/tmp/deploy/index.py │ python │ xx KiB │
+				├──────────────────────────────────────┼────────┼──────────┤
+				│ Total (1 module)                     │        │ xx KiB │
+				└──────────────────────────────────────┴────────┴──────────┘
+				Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Uploaded test-name (TIMINGS)
+				Published test-name (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Deployment ID: Galaxy-Class
+				Current Version ID: Galaxy-Class
 
 
-			Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments"
-		`);
+				Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments"
+			`);
 		});
 
 		it("should upload python module specified in CLI args", async () => {
-			writeWranglerToml();
+			writeWranglerToml({
+				compatibility_flags: ["python_workers"],
+			});
 			await fs.promises.writeFile(
 				"index.py",
 				"from js import Response;\ndef fetch(request):\n return Response.new('hello')"
@@ -10121,21 +10912,24 @@ export default{
 					".wrangler/tmp/deploy/index.py"
 				)
 			).toMatchInlineSnapshot(`
-			"┌──────────────────────────────────────┬────────┬──────────┐
-			│ Name                                 │ Type   │ Size     │
-			├──────────────────────────────────────┼────────┼──────────┤
-			│ .wrangler/tmp/deploy/index.py │ python │ xx KiB │
-			└──────────────────────────────────────┴────────┴──────────┘
-			Total Upload: xx KiB / gzip: xx KiB
-			Uploaded test-name (TIMINGS)
-			Published test-name (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Deployment ID: Galaxy-Class
-			Current Version ID: Galaxy-Class
+				"┌──────────────────────────────────────┬────────┬──────────┐
+				│ Name                                 │ Type   │ Size     │
+				├──────────────────────────────────────┼────────┼──────────┤
+				│ .wrangler/tmp/deploy/index.py │ python │ xx KiB │
+				├──────────────────────────────────────┼────────┼──────────┤
+				│ Total (1 module)                     │        │ xx KiB │
+				└──────────────────────────────────────┴────────┴──────────┘
+				Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Uploaded test-name (TIMINGS)
+				Published test-name (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Deployment ID: Galaxy-Class
+				Current Version ID: Galaxy-Class
 
 
-			Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments"
-		`);
+				Note: Deployment ID has been renamed to Version ID. Deployment ID is present to maintain compatibility with the previous behavior of this command. This output will change in a future version of Wrangler. To learn more visit: https://developers.cloudflare.com/workers/configuration/versions-and-deployments"
+			`);
 		});
 	});
 
@@ -10164,6 +10958,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- Hyperdrive Configs:
 			  - HYPERDRIVE: 343cd4f1d58c42fbb5bd082592fd7143
@@ -10199,6 +10994,7 @@ export default{
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Your worker has access to the following bindings:
 			- mTLS Certificates:
 			  - CERT_ONE: 1234
@@ -10216,11 +11012,8 @@ export default{
 
 	describe("--keep-vars", () => {
 		it("should send keepVars when keep-vars is passed in", async () => {
-			process.env = {
-				...process.env,
-				CLOUDFLARE_API_TOKEN: "hunter2",
-				CLOUDFLARE_ACCOUNT_ID: "some-account-id",
-			};
+			vi.stubEnv("CLOUDFLARE_API_TOKEN", "hunter2");
+			vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "some-account-id");
 			setIsTTY(false);
 			writeWranglerToml();
 			writeWorkerSource();
@@ -10233,6 +11026,7 @@ export default{
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -10246,11 +11040,8 @@ export default{
 		});
 
 		it("should not send keepVars by default", async () => {
-			process.env = {
-				...process.env,
-				CLOUDFLARE_API_TOKEN: "hunter2",
-				CLOUDFLARE_ACCOUNT_ID: "some-account-id",
-			};
+			vi.stubEnv("CLOUDFLARE_API_TOKEN", "hunter2");
+			vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "some-account-id");
 			setIsTTY(false);
 			writeWranglerToml();
 			writeWorkerSource();
@@ -10263,6 +11054,7 @@ export default{
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -10276,11 +11068,8 @@ export default{
 		});
 
 		it("should send keepVars when `keep_vars = true`", async () => {
-			process.env = {
-				...process.env,
-				CLOUDFLARE_API_TOKEN: "hunter2",
-				CLOUDFLARE_ACCOUNT_ID: "some-account-id",
-			};
+			vi.stubEnv("CLOUDFLARE_API_TOKEN", "hunter2");
+			vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "some-account-id");
 			setIsTTY(false);
 			writeWranglerToml({
 				keep_vars: true,
@@ -10295,6 +11084,7 @@ export default{
 
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			Published test-name (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -10329,6 +11119,7 @@ export default{
 			);
 			expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
 			Uploaded test-name (TIMINGS)
 			  Dispatch Namespace: test-dispatch-namespace
 			Current Deployment ID: Galaxy-Class
@@ -11007,3 +11798,23 @@ function mockPostQueueHTTPConsumer(
 	);
 	return requests;
 }
+
+const mockAUSRequest = async (bodies?: AssetManifest[]) => {
+	msw.use(
+		http.post<never, AssetManifest>(
+			`*/accounts/some-account-id/workers/scripts/test-name/assets-upload-session`,
+			async ({ request }) => {
+				bodies?.push(await request.json());
+				return HttpResponse.json(
+					{
+						success: true,
+						errors: [],
+						messages: [],
+						result: { jwt: "<<aus-completion-token>>", buckets: [[]] },
+					},
+					{ status: 201 }
+				);
+			}
+		)
+	);
+};

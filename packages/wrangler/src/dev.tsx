@@ -12,7 +12,7 @@ import {
 } from "./api/startDevWorker/utils";
 import { findWranglerToml, printBindings, readConfig } from "./config";
 import { getEntry } from "./deployment-bundle/entry";
-import { validateNodeCompat } from "./deployment-bundle/node-compat";
+import { getNodeCompatMode } from "./deployment-bundle/node-compat";
 import { getBoundRegisteredWorkers } from "./dev-registry";
 import Dev, { devRegistry } from "./dev/dev";
 import { getVarsForDev } from "./dev/dev-vars";
@@ -21,11 +21,12 @@ import registerDevHotKeys from "./dev/hotkeys";
 import { maybeRegisterLocalWorker } from "./dev/local";
 import { startDevServer } from "./dev/start-server";
 import { UserError } from "./errors";
+import { processExperimentalAssetsArg } from "./experimental-assets";
 import { run } from "./experimental-flags";
 import isInteractive from "./is-interactive";
 import { logger } from "./logger";
 import * as metrics from "./metrics";
-import { getAssetPaths, getSiteAssetPaths } from "./sites";
+import { getLegacyAssetPaths, getSiteAssetPaths } from "./sites";
 import {
 	getAccountFromCache,
 	loginOrRefreshIfRequired,
@@ -165,16 +166,29 @@ export function devOptions(yargs: CommonYargsArgv) {
 					"Host to act as origin in local mode, defaults to dev.host or route",
 			})
 			.option("experimental-public", {
-				describe: "Static assets to be served",
+				describe: "(Deprecated) Static assets to be served",
 				type: "string",
 				requiresArg: true,
 				deprecated: true,
 				hidden: true,
 			})
-			.option("assets", {
-				describe: "Static assets to be served",
+			.option("legacy-assets", {
+				describe: "(Experimental) Static assets to be served",
 				type: "string",
 				requiresArg: true,
+			})
+			.option("assets", {
+				describe: "(Experimental) Static assets to be served",
+				type: "string",
+				requiresArg: true,
+				hidden: true,
+			})
+			.option("experimental-assets", {
+				describe: "Static assets to be served",
+				type: "string",
+				alias: "x-assets",
+				requiresArg: true,
+				hidden: true,
 			})
 			.option("public", {
 				describe: "(Deprecated) Static assets to be served",
@@ -361,6 +375,26 @@ This is currently not supported 😭, but we think that we'll get it to work soo
 		}
 	}
 
+	if (args.assets) {
+		logger.warn(
+			`The --assets argument is experimental. We are going to be changing the behavior of this experimental command after August 15th.\n` +
+				`Releases of wrangler after this date will no longer support current functionality.\n` +
+				`Please shift to the --legacy-assets command to preserve the current functionality.`
+		);
+	}
+
+	if (args.legacyAssets) {
+		logger.warn(
+			`The --legacy-assets argument is experimental and may change or break at any time.`
+		);
+	}
+
+	if (args.legacyAssets && args.assets) {
+		throw new UserError("Cannot use both --assets and --legacy-assets.");
+	}
+
+	args.legacyAssets = args.legacyAssets ?? args.assets;
+
 	let watcher;
 	try {
 		const devInstance = await run(
@@ -422,11 +456,10 @@ export type AdditionalDevProps = {
 	additionalModules?: CfModule[];
 	moduleRoot?: string;
 	rules?: Rule[];
-	constellation?: Environment["constellation"];
 	showInteractiveDevSession?: boolean;
 };
 
-export type StartDevOptions = DevArguments &
+export type StartDevOptions = Omit<DevArguments, "assets"> &
 	// These options can be passed in directly when called with the `wrangler.dev()` API.
 	// They aren't exposed as CLI arguments.
 	AdditionalDevProps & {
@@ -485,19 +518,45 @@ async function updateDevEnvRegistry(
 	});
 }
 
+async function getPagesAssetsFetcher(
+	options: EnablePagesAssetsServiceBindingOptions | undefined
+): Promise<StartDevWorkerInput["bindings"] | undefined> {
+	if (options !== undefined) {
+		// `./miniflare-cli/assets` dynamically imports`@cloudflare/pages-shared/environment-polyfills`.
+		// `@cloudflare/pages-shared/environment-polyfills/types.ts` defines `global`
+		// augmentations that pollute the `import`-site's typing environment.
+		//
+		// We `require` instead of `import`ing here to avoid polluting the main
+		// `wrangler` TypeScript project with the `global` augmentations. This
+		// relies on the fact that `require` is untyped.
+		//
+		// eslint-disable-next-line @typescript-eslint/no-var-requires
+		const generateASSETSBinding = require("./miniflare-cli/assets").default;
+		return {
+			ASSETS: {
+				type: "fetcher",
+				fetcher: await generateASSETSBinding({
+					log: logger,
+					...options,
+				}),
+			},
+		};
+	}
+}
+
 export async function startDev(args: StartDevOptions) {
 	let watcher: ReturnType<typeof watch> | undefined;
 	let rerender: (node: React.ReactNode) => void | undefined;
 	try {
+		const configPath =
+			args.config ||
+			(args.script && findWranglerToml(path.dirname(args.script)));
+		let config = readConfig(configPath, args);
+
 		if (args.logLevel) {
 			logger.loggerLevel = args.logLevel;
 		}
 
-		if (args.local) {
-			logger.warn(
-				"--local is no longer required and will be removed in a future version.\n`wrangler dev` now uses the local Cloudflare Workers runtime by default. 🎉"
-			);
-		}
 		if (args.experimentalLocal) {
 			logger.warn(
 				"--experimental-local is no longer required and will be removed in a future version.\n`wrangler dev` now uses the local Cloudflare Workers runtime by default. 🎉"
@@ -510,14 +569,17 @@ export async function startDev(args: StartDevOptions) {
 				"Passing --inspect is unnecessary, now you can always connect to devtools."
 			);
 		}
+
 		if (args.experimentalPublic) {
 			throw new UserError(
-				"The --experimental-public field has been renamed to --assets"
+				"The --experimental-public field has been deprecated, try --legacy-assets instead."
 			);
 		}
 
 		if (args.public) {
-			throw new UserError("The --public field has been renamed to --assets");
+			throw new UserError(
+				"The --public field has been deprecated, try --legacy-assets instead."
+			);
 		}
 
 		if (args.experimentalEnableLocalPersistence) {
@@ -528,18 +590,22 @@ export async function startDev(args: StartDevOptions) {
 			);
 		}
 
-		if (args.assets) {
-			logger.warn(
-				"The --assets argument is experimental and may change or break at any time"
+		const experimentalAssets = processExperimentalAssetsArg(args, config);
+		if (experimentalAssets) {
+			args.forceLocal = true;
+		}
+
+		/*
+		 * - `config.legacy_assets` conflates `legacy_assets` and `assets`
+		 * - `args.legacyAssets` conflates `legacy-assets` and `assets`
+		 */
+		if ((args.legacyAssets || config.legacy_assets) && experimentalAssets) {
+			throw new UserError(
+				"Cannot use Legacy Assets and Experimental Assets in the same Worker."
 			);
 		}
 
-		const configPath =
-			args.config ||
-			(args.script && findWranglerToml(path.dirname(args.script)));
-
 		const projectRoot = configPath && path.dirname(configPath);
-		let config = readConfig(configPath, args);
 
 		const devEnv = new DevEnv();
 
@@ -614,17 +680,18 @@ export async function startDev(args: StartDevOptions) {
 					moduleRoot: args.moduleRoot,
 					moduleRules: args.rules,
 					nodejsCompatMode: (parsedConfig: Config) =>
-						validateNodeCompat({
-							legacyNodeCompat:
-								args.nodeCompat ?? parsedConfig.node_compat ?? false,
-							compatibilityFlags:
-								args.compatibilityFlags ??
-								parsedConfig.compatibility_flags ??
-								[],
-							noBundle: args.noBundle ?? parsedConfig.no_bundle ?? false,
-						}),
+						getNodeCompatMode(
+							args.compatibilityFlags ?? parsedConfig.compatibility_flags ?? [],
+							{
+								nodeCompat: args.nodeCompat ?? parsedConfig.node_compat,
+								noBundle: args.noBundle ?? parsedConfig.no_bundle,
+							}
+						),
 				},
 				bindings: {
+					...(await getPagesAssetsFetcher(
+						args.enablePagesAssetsServiceBinding
+					)),
 					...collectPlainTextVars(args.var),
 					...convertCfWorkerInitBindingstoBindings({
 						kv_namespaces: args.kv,
@@ -641,7 +708,6 @@ export async function startDev(args: StartDevOptions) {
 						r2_buckets: args.r2,
 						d1_databases: args.d1Databases,
 						vectorize: undefined,
-						constellation: args.constellation,
 						hyperdrive: undefined,
 						services: args.services,
 						analytics_engine_datasets: undefined,
@@ -649,6 +715,7 @@ export async function startDev(args: StartDevOptions) {
 						mtls_certificates: undefined,
 						logfwdr: undefined,
 						unsafe: undefined,
+						experimental_assets: undefined,
 					}),
 				},
 				dev: {
@@ -694,21 +761,27 @@ export async function startDev(args: StartDevOptions) {
 				},
 				legacy: {
 					site: (configParam) => {
-						const assetPaths = getResolvedAssetPaths(args, configParam);
+						const legacyAssetPaths = getResolvedLegacyAssetPaths(
+							args,
+							configParam
+						);
 
-						return Boolean(args.site || configParam.site) && assetPaths
+						return Boolean(args.site || configParam.site) && legacyAssetPaths
 							? {
 									bucket: path.join(
-										assetPaths.baseDirectory,
-										assetPaths?.assetDirectory
+										legacyAssetPaths.baseDirectory,
+										legacyAssetPaths?.assetDirectory
 									),
-									include: assetPaths.includePatterns,
-									exclude: assetPaths.excludePatterns,
+									include: legacyAssetPaths.includePatterns,
+									exclude: legacyAssetPaths.excludePatterns,
 								}
 							: undefined;
 					},
-					assets: (configParam) => configParam.assets,
+					legacyAssets: (configParam) => configParam.legacy_assets,
 					enableServiceEnvironments: !(args.legacyEnv ?? true),
+				},
+				experimental: {
+					assets: experimentalAssets,
 				},
 			} satisfies StartDevWorkerInput);
 
@@ -758,12 +831,14 @@ export async function startDev(args: StartDevOptions) {
 			additionalModules,
 		} = await validateDevServerSettings(args, config);
 
-		const nodejsCompatMode = validateNodeCompat({
-			legacyNodeCompat: args.nodeCompat ?? config.node_compat ?? false,
-			compatibilityFlags:
-				args.compatibilityFlags ?? config.compatibility_flags ?? [],
-			noBundle: args.noBundle ?? config.no_bundle ?? false,
-		});
+		const nodejsCompatMode = getNodeCompatMode(
+			args.compatibilityFlags ?? config.compatibility_flags ?? [],
+			{
+				nodeCompat: args.nodeCompat ?? config.node_compat,
+				noBundle: args.noBundle ?? config.no_bundle,
+			}
+		);
+
 		void metrics.sendMetricsEvent(
 			"run dev",
 			{
@@ -775,7 +850,7 @@ export async function startDev(args: StartDevOptions) {
 
 		// eslint-disable-next-line no-inner-declarations
 		async function getDevReactElement(configParam: Config) {
-			const { assetPaths, bindings } = getBindingsAndAssetPaths(
+			const { legacyAssetPaths, bindings } = getBindingsAndLegacyAssetPaths(
 				args,
 				configParam
 			);
@@ -814,8 +889,9 @@ export async function startDev(args: StartDevOptions) {
 						configParam.account_id ??
 						getAccountFromCache()?.id
 					}
-					assetPaths={assetPaths}
-					assetsConfig={configParam.assets}
+					legacyAssetPaths={legacyAssetPaths}
+					legacyAssetsConfig={configParam.legacy_assets}
+					experimentalAssets={experimentalAssets}
 					initialPort={
 						args.port ?? configParam.dev.port ?? (await getLocalPort())
 					}
@@ -853,6 +929,7 @@ export async function startDev(args: StartDevOptions) {
 				/>
 			);
 		}
+
 		const devReactElement = render(await getDevReactElement(config));
 
 		rerender = devReactElement.rerender;
@@ -895,11 +972,13 @@ export async function startApiDev(args: StartDevOptions) {
 		additionalModules,
 	} = await validateDevServerSettings(args, config);
 
-	const nodejsCompatMode = validateNodeCompat({
-		legacyNodeCompat: args.nodeCompat ?? config.node_compat ?? false,
-		compatibilityFlags: args.compatibilityFlags ?? config.compatibility_flags,
-		noBundle: args.noBundle ?? config.no_bundle ?? false,
-	});
+	const nodejsCompatMode = getNodeCompatMode(
+		args.compatibilityFlags ?? config.compatibility_flags,
+		{
+			nodeCompat: args.nodeCompat ?? config.node_compat,
+			noBundle: args.noBundle ?? config.no_bundle,
+		}
+	);
 
 	await metrics.sendMetricsEvent(
 		"run dev (api)",
@@ -935,7 +1014,7 @@ export async function startApiDev(args: StartDevOptions) {
 
 	// eslint-disable-next-line no-inner-declarations
 	async function getDevServer(configParam: Config) {
-		const { assetPaths, bindings } = getBindingsAndAssetPaths(
+		const { legacyAssetPaths, bindings } = getBindingsAndLegacyAssetPaths(
 			args,
 			configParam
 		);
@@ -975,8 +1054,9 @@ export async function startApiDev(args: StartDevOptions) {
 			liveReload: args.liveReload ?? false,
 			accountId:
 				args.accountId ?? configParam.account_id ?? getAccountFromCache()?.id,
-			assetPaths: assetPaths,
-			assetsConfig: configParam.assets,
+			legacyAssetPaths: legacyAssetPaths,
+			legacyAssetsConfig: configParam.legacy_assets,
+			experimentalAssets: undefined,
 			//port can be 0, which means to use a random port
 			initialPort: args.port ?? configParam.dev.port ?? (await getLocalPort()),
 			initialIp: args.ip ?? configParam.dev.ip,
@@ -1114,8 +1194,35 @@ export async function validateDevServerSettings(
 	args: StartDevOptions,
 	config: Config
 ) {
+	/*
+	 * - `args.legacyAssets` conflates `legacy-assets` and `assets`
+	 * - `config.legacy_assets` conflates `legacy_assets` and `assets`
+	 */
+	if (
+		(args.legacyAssets || config.legacy_assets) &&
+		(args.site || config.site)
+	) {
+		throw new UserError(
+			"Cannot use Legacy Assets and Workers Sites in the same Worker."
+		);
+	}
+
+	if (
+		(args.experimentalAssets || config.experimental_assets) &&
+		(args.site || config.site)
+	) {
+		throw new UserError(
+			"Cannot use Experimental Assets and Workers Sites in the same Worker."
+		);
+	}
+
 	const entry = await getEntry(
-		{ assets: args.assets, script: args.script, moduleRoot: args.moduleRoot },
+		{
+			legacyAssets: args.legacyAssets,
+			script: args.script,
+			moduleRoot: args.moduleRoot,
+			experimentalAssets: args.experimentalAssets,
+		},
 		config,
 		"dev"
 	);
@@ -1156,12 +1263,6 @@ export async function validateDevServerSettings(
 						}${service.entrypoint ? `#${service.entrypoint}` : ""})`
 				)
 				.join(", ")}`
-		);
-	}
-
-	if ((args.assets ?? config.assets) && (args.site ?? config.site)) {
-		throw new UserError(
-			"Cannot use Assets and Workers Sites in the same Worker."
 		);
 	}
 
@@ -1227,29 +1328,29 @@ export function getResolvedBindings(
 	return bindings;
 }
 
-export function getResolvedAssetPaths(
+export function getResolvedLegacyAssetPaths(
 	args: StartDevOptions,
 	configParam: Config
 ) {
-	const assetPaths =
-		args.assets || configParam.assets
-			? getAssetPaths(configParam, args.assets)
+	const legacyAssetPaths =
+		args.legacyAssets || configParam.legacy_assets
+			? getLegacyAssetPaths(configParam, args.legacyAssets)
 			: getSiteAssetPaths(
 					configParam,
 					args.site,
 					args.siteInclude,
 					args.siteExclude
 				);
-	return assetPaths;
+	return legacyAssetPaths;
 }
 
-export function getBindingsAndAssetPaths(
+export function getBindingsAndLegacyAssetPaths(
 	args: StartDevOptions,
 	configParam: Config
 ) {
 	return {
 		bindings: getResolvedBindings(args, configParam),
-		assetPaths: getResolvedAssetPaths(args, configParam),
+		legacyAssetPaths: getResolvedLegacyAssetPaths(args, configParam),
 	};
 }
 
@@ -1404,7 +1505,6 @@ export function getBindings(
 		r2_buckets: mergedR2Bindings,
 		d1_databases: mergedD1Bindings,
 		vectorize: configParam.vectorize,
-		constellation: configParam.constellation,
 		hyperdrive: hyperdriveBindings,
 		services: mergedServiceBindings,
 		analytics_engine_datasets: configParam.analytics_engine_datasets,
@@ -1418,13 +1518,10 @@ export function getBindings(
 		},
 		mtls_certificates: configParam.mtls_certificates,
 		send_email: configParam.send_email,
+		experimental_assets: configParam.experimental_assets?.binding
+			? { binding: configParam.experimental_assets?.binding }
+			: undefined,
 	};
-
-	if (bindings.constellation && bindings.constellation.length > 0) {
-		logger.warn(
-			"`constellation` is deprecated and will be removed in the next major version.\nPlease migrate to Workers AI, learn more here https://developers.cloudflare.com/workers-ai/."
-		);
-	}
 
 	return bindings;
 }

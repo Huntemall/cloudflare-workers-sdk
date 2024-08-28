@@ -104,8 +104,8 @@ export class BundlerController extends Controller<BundlerControllerEventMap> {
 						bundle: true,
 						additionalModules: [],
 						moduleCollector,
-						serveAssetsFromWorker: Boolean(
-							config.legacy?.assets && !config.dev?.remote
+						serveLegacyAssetsFromWorker: Boolean(
+							config.legacy?.legacyAssets && !config.dev?.remote
 						),
 						doBindings: bindings?.durable_objects?.bindings ?? [],
 						jsxFactory: config.build.jsxFactory,
@@ -116,7 +116,7 @@ export class BundlerController extends Controller<BundlerControllerEventMap> {
 						define: config.build.define,
 						checkFetch: true,
 						alias: config.build.alias,
-						assets: config.legacy?.assets,
+						legacyAssets: config.legacy?.legacyAssets,
 						// enable the cache when publishing
 						bypassAssetCache: false,
 						// We want to know if the build is for development or publishing
@@ -215,9 +215,9 @@ export class BundlerController extends Controller<BundlerControllerEventMap> {
 				processEntrypoint: Boolean(config.build?.processEntrypoint),
 				additionalModules: config.build?.additionalModules ?? [],
 				rules: config.build.moduleRules,
-				assets: config.legacy?.assets,
-				serveAssetsFromWorker: Boolean(
-					config.legacy?.assets && !config.dev?.remote
+				legacyAssets: config.legacy?.legacyAssets,
+				serveLegacyAssetsFromWorker: Boolean(
+					config.legacy?.legacyAssets && !config.dev?.remote
 				),
 				tsconfig: config.build?.tsconfig,
 				minify: config.build?.minify,

@@ -287,12 +287,19 @@ const frameworkTests: Record<string, FrameworkTestConfig> = {
 		},
 	},
 	react: {
+		promptHandlers: [
+			{
+				matcher: /Select a variant:/,
+				input: [keys.enter],
+			},
+		],
 		testCommitMessage: true,
 		unsupportedOSs: ["win32"],
+		unsupportedPms: ["yarn"],
 		timeout: LONG_TIMEOUT,
 		verifyDeploy: {
 			route: "/",
-			expectedText: "React App",
+			expectedText: "Vite + React",
 		},
 	},
 	solid: {
@@ -518,7 +525,7 @@ const runCli = async (
 	}
 
 	const deployedUrlRe =
-		/deployment is ready at: (https:\/\/.+\.(pages|workers)\.dev)/;
+		/deployment is ready at: (https:\/\/.+?\.(pages|workers)\.dev)/;
 
 	const match = output.replaceAll("\n", "").match(deployedUrlRe);
 	if (!match || !match[1]) {

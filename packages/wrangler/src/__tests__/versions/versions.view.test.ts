@@ -5,7 +5,7 @@ import { mockConsoleMethods } from "../helpers/mock-console";
 import { msw, mswGetVersion } from "../helpers/msw";
 import { runInTempDir } from "../helpers/run-in-tmp";
 import { runWrangler } from "../helpers/run-wrangler";
-import writeWranglerToml from "../helpers/write-wrangler-toml";
+import { writeWranglerToml } from "../helpers/write-wrangler-toml";
 
 describe("versions view", () => {
 	mockAccountId();
@@ -287,8 +287,8 @@ describe("versions view", () => {
 					metadata: {
 						author_email: "test@test.com",
 						author_id: "123",
-						created_on: "2020-01-01 00:00:00",
-						modified_on: "2020-01-01 00:00:00",
+						created_on: "2020-01-01T00:00:00Z",
+						modified_on: "2020-01-01T00:00:00Z",
 						source: "api",
 					},
 					number: 2,
@@ -333,8 +333,8 @@ describe("versions view", () => {
 					metadata: {
 						author_email: "test@test.com",
 						author_id: "123",
-						created_on: "2020-01-01 00:00:00",
-						modified_on: "2020-01-01 00:00:00",
+						created_on: "2020-01-01T00:00:00Z",
+						modified_on: "2020-01-01T00:00:00Z",
 						source: "api",
 					},
 					number: 2,
@@ -381,8 +381,8 @@ describe("versions view", () => {
 					metadata: {
 						author_email: "test@test.com",
 						author_id: "123",
-						created_on: "2020-01-01 00:00:00",
-						modified_on: "2020-01-01 00:00:00",
+						created_on: "2020-01-01T00:00:00Z",
+						modified_on: "2020-01-01T00:00:00Z",
 						source: "api",
 					},
 					number: 2,
@@ -431,8 +431,8 @@ describe("versions view", () => {
 					metadata: {
 						author_email: "test@test.com",
 						author_id: "123",
-						created_on: "2020-01-01 00:00:00",
-						modified_on: "2020-01-01 00:00:00",
+						created_on: "2020-01-01T00:00:00Z",
+						modified_on: "2020-01-01T00:00:00Z",
 						source: "api",
 					},
 					number: 2,
@@ -487,8 +487,8 @@ describe("versions view", () => {
 					metadata: {
 						author_email: "test@test.com",
 						author_id: "123",
-						created_on: "2020-01-01 00:00:00",
-						modified_on: "2020-01-01 00:00:00",
+						created_on: "2020-01-01T00:00:00Z",
+						modified_on: "2020-01-01T00:00:00Z",
 						source: "api",
 					},
 					number: 2,
@@ -544,8 +544,8 @@ describe("versions view", () => {
 					metadata: {
 						author_email: "test@test.com",
 						author_id: "123",
-						created_on: "2020-01-01 00:00:00",
-						modified_on: "2020-01-01 00:00:00",
+						created_on: "2020-01-01T00:00:00Z",
+						modified_on: "2020-01-01T00:00:00Z",
 						source: "api",
 					},
 					number: 2,

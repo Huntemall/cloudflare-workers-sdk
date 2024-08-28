@@ -11,7 +11,7 @@ export function mockUploadWorkerRequest(
 		available_on_subdomain?: boolean;
 		expectedEntry?: string | RegExp | ((entry: string | null) => void);
 		expectedMainModule?: string;
-		expectedType?: "esm" | "sw";
+		expectedType?: "esm" | "sw" | "none";
 		expectedBindings?: unknown;
 		expectedModules?: Record<string, string | null>;
 		expectedCompatibilityDate?: string;
@@ -28,6 +28,7 @@ export function mockUploadWorkerRequest(
 		tag?: string;
 		expectedDispatchNamespace?: string;
 		expectedScriptName?: string;
+		expectedExperimentalAssets?: boolean;
 	} = {}
 ) {
 	const expectedScriptName = (options.expectedScriptName ??= "test-name");
@@ -57,8 +58,11 @@ export function mockUploadWorkerRequest(
 		const metadata = JSON.parse(
 			await toString(formBody.get("metadata"))
 		) as WorkerMetadata;
+
 		if (expectedType === "esm") {
 			expect(metadata.main_module).toEqual(expectedMainModule);
+		} else if (expectedType === "none") {
+			expect(metadata.main_module).toEqual(undefined);
 		} else {
 			expect(metadata.body_part).toEqual("index.js");
 		}
@@ -98,6 +102,9 @@ export function mockUploadWorkerRequest(
 		if ("expectedLimits" in options) {
 			expect(metadata.limits).toEqual(expectedLimits);
 		}
+		if ("expectedExperimentalAssets" in options) {
+			expect(metadata.assets).toEqual("<<aus-completion-token>>");
+		}
 		if (expectedUnsafeMetaData !== undefined) {
 			Object.keys(expectedUnsafeMetaData).forEach((key) => {
 				expect(metadata[key]).toEqual(expectedUnsafeMetaData[key]);
@@ -116,6 +123,7 @@ export function mockUploadWorkerRequest(
 				mutable_pipeline_id: "mutableId",
 				tag: "sample-tag",
 				deployment_id: "Galaxy-Class",
+				startup_time_ms: 100,
 			})
 		);
 	};

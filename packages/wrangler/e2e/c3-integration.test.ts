@@ -1,3 +1,4 @@
+import assert from "node:assert";
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -14,7 +15,12 @@ describe("c3 integration", () => {
 	beforeAll(async () => {
 		const pathToC3 = path.resolve(__dirname, "../../create-cloudflare");
 		execSync("pnpm pack --pack-destination ./pack", { cwd: pathToC3 });
-		const version = execSync("ls pack", { encoding: "utf-8", cwd: pathToC3 });
+		const versions = execSync("ls -1 pack", {
+			encoding: "utf-8",
+			cwd: pathToC3,
+		});
+		const version = versions.trim().split("\n").at(-1); // get last version
+		assert(version);
 		c3Packed = path.join(pathToC3, "pack", version);
 	});
 
@@ -28,13 +34,13 @@ describe("c3 integration", () => {
 			GIT_COMMITTER_EMAIL: "test-user@cloudflare.com",
 		};
 
-		const init = await helper.run(`wrangler init ${workerName} --yes`, {
+		await helper.run(`wrangler init ${workerName} --yes`, {
 			env,
 		});
 
-		expect(init.stdout).toContain("APPLICATION CREATED");
-
-		expect(existsSync(path.join(helper.tmpPath, workerName))).toBe(true);
+		expect(
+			existsSync(path.join(helper.tmpPath, workerName, "wrangler.toml"))
+		).toBe(true);
 	});
 
 	it("can run `wrangler dev` on generated worker", async () => {

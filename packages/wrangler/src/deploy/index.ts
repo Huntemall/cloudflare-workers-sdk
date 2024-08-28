@@ -2,6 +2,7 @@ import path from "node:path";
 import { findWranglerToml, readConfig } from "../config";
 import { getEntry } from "../deployment-bundle/entry";
 import { UserError } from "../errors";
+import { processExperimentalAssetsArg } from "../experimental-assets";
 import {
 	getRules,
 	getScriptName,
@@ -10,7 +11,8 @@ import {
 } from "../index";
 import { logger } from "../logger";
 import * as metrics from "../metrics";
-import { getAssetPaths, getSiteAssetPaths } from "../sites";
+import { writeOutput } from "../output";
+import { getLegacyAssetPaths, getSiteAssetPaths } from "../sites";
 import { requireAuth } from "../user";
 import { collectKeyValues } from "../utils/collectKeyValues";
 import deploy from "./deploy";
@@ -84,23 +86,36 @@ export function deployOptions(yargs: CommonYargsArgv) {
 				default: false,
 			})
 			.option("experimental-public", {
-				describe: "Static assets to be served",
+				describe: "(Deprecated) Static assets to be served",
 				type: "string",
 				requiresArg: true,
 				deprecated: true,
 				hidden: true,
 			})
 			.option("public", {
-				describe: "Static assets to be served",
+				describe: "(Deprecated) Static assets to be served",
 				type: "string",
 				requiresArg: true,
 				deprecated: true,
 				hidden: true,
 			})
-			.option("assets", {
-				describe: "Static assets to be served",
+			.option("legacy-assets", {
+				describe: "(Experimental) Static assets to be served",
 				type: "string",
 				requiresArg: true,
+			})
+			.option("assets", {
+				describe: "(Experimental) Static assets to be served",
+				type: "string",
+				requiresArg: true,
+				hidden: true,
+			})
+			.option("experimental-assets", {
+				describe: "Static assets to be served",
+				type: "string",
+				alias: "x-assets",
+				requiresArg: true,
+				hidden: true,
 			})
 			.option("site", {
 				describe: "Root folder of static assets for Workers Sites",
@@ -226,6 +241,26 @@ export async function deployHandler(
 		);
 	}
 
+	if (args.assets) {
+		logger.warn(
+			`The --assets argument is experimental. We are going to be changing the behavior of this experimental command after August 15th.\n` +
+				`Releases of wrangler after this date will no longer support current functionality.\n` +
+				`Please shift to the --legacy-assets command to preserve the current functionality.`
+		);
+	}
+
+	if (args.legacyAssets) {
+		logger.warn(
+			`The --legacy-assets argument is experimental and may change or break at any time.`
+		);
+	}
+
+	if (args.legacyAssets && args.assets) {
+		throw new UserError("Cannot use both --assets and --legacy-assets.");
+	}
+
+	args.legacyAssets = args.legacyAssets ?? args.assets;
+
 	const configPath =
 		args.config || (args.script && findWranglerToml(path.dirname(args.script)));
 	const projectRoot = configPath && path.dirname(configPath);
@@ -233,15 +268,23 @@ export async function deployHandler(
 	const entry = await getEntry(args, config, "deploy");
 
 	if (args.public) {
-		throw new UserError("The --public field has been renamed to --assets");
+		throw new UserError(
+			"The --public field has been deprecated, try --legacy-assets instead."
+		);
 	}
 	if (args.experimentalPublic) {
 		throw new UserError(
-			"The --experimental-public field has been renamed to --assets"
+			"The --experimental-public field has been deprecated, try --legacy-assets instead."
 		);
 	}
 
-	if ((args.assets || config.assets) && (args.site || config.site)) {
+	if (
+		(args.legacyAssets ||
+			config.legacy_assets ||
+			args.experimentalAssets ||
+			config.experimental_assets) &&
+		(args.site || config.site)
+	) {
 		throw new UserError(
 			"Cannot use Assets and Workers Sites in the same Worker."
 		);
@@ -252,6 +295,9 @@ export async function deployHandler(
 			"The --assets argument is experimental and may change or break at any time"
 		);
 	}
+
+	const experimentalAssets = processExperimentalAssetsArg(args, config);
+
 	if (args.latest) {
 		logger.warn(
 			"Using the latest version of the Workers runtime. To silence this warning, please choose a specific version of the runtime with --compatibility-date, or add a compatibility_date to your wrangler.toml.\n"
@@ -264,9 +310,9 @@ export async function deployHandler(
 
 	const accountId = args.dryRun ? undefined : await requireAuth(config);
 
-	const assetPaths =
-		args.assets || config.assets
-			? getAssetPaths(config, args.assets)
+	const legacyAssetPaths =
+		args.legacyAssets || config.legacy_assets
+			? getLegacyAssetPaths(config, args.legacyAssets)
 			: getSiteAssetPaths(
 					config,
 					args.site,
@@ -279,10 +325,11 @@ export async function deployHandler(
 	}
 
 	const beforeUpload = Date.now();
-	const { sourceMapSize } = await deploy({
+	const name = getScriptName(args, config);
+	const { sourceMapSize, deploymentId, workerTag, targets } = await deploy({
 		config,
 		accountId,
-		name: getScriptName(args, config),
+		name,
 		rules: getRules(config),
 		entry,
 		env: args.env,
@@ -298,7 +345,8 @@ export async function deployHandler(
 		jsxFragment: args.jsxFragment,
 		tsconfig: args.tsconfig,
 		routes: args.routes,
-		assetPaths,
+		experimentalAssets,
+		legacyAssetPaths,
 		legacyEnv: isLegacyEnv(config),
 		minify: args.minify,
 		nodeCompat: args.nodeCompat,
@@ -313,6 +361,16 @@ export async function deployHandler(
 		projectRoot,
 		dispatchNamespace: args.dispatchNamespace,
 		experimentalVersions: args.experimentalVersions,
+	});
+
+	writeOutput({
+		type: "deploy",
+		version: 1,
+		worker_name: name ?? null,
+		worker_tag: workerTag,
+		// Note that the `deploymentId` returned from a simple deployment is actually the versionId of the uploaded version.
+		version_id: deploymentId,
+		targets,
 	});
 
 	await metrics.sendMetricsEvent(

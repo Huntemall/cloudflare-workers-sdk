@@ -1,6 +1,7 @@
 import type { Config } from "../../config";
 import type {
 	CustomDomainRoute,
+	ExperimentalAssets,
 	Rule,
 	ZoneIdRoute,
 	ZoneNameRoute,
@@ -8,7 +9,6 @@ import type {
 import type { NodeJSCompatMode } from "../../deployment-bundle/node-compat";
 import type {
 	CfAnalyticsEngineDataset,
-	CfConstellation,
 	CfD1Database,
 	CfDispatchNamespace,
 	CfDurableObject,
@@ -158,10 +158,13 @@ export interface StartDevWorkerInput {
 	};
 	legacy?: {
 		site?: Hook<Config["site"], [Config]>;
-		assets?: Hook<Config["assets"], [Config]>;
+		legacyAssets?: Hook<Config["legacy_assets"], [Config]>;
 		enableServiceEnvironments?: boolean;
 	};
 	unsafe?: Omit<CfUnsafe, "bindings">;
+	experimental?: {
+		assets?: Omit<ExperimentalAssets, "bindings">;
+	};
 }
 
 export type StartDevWorkerOptions = StartDevWorkerInput & {
@@ -178,7 +181,7 @@ export type StartDevWorkerOptions = StartDevWorkerInput & {
 		processEntrypoint: boolean;
 	};
 	legacy: StartDevWorkerInput["legacy"] & {
-		assets?: Config["assets"];
+		legacyAssets?: Config["legacy_assets"];
 		site?: Config["site"];
 	};
 	dev: StartDevWorkerInput["dev"] & {
@@ -252,7 +255,6 @@ export type Binding =
 	| ({ type: "r2_bucket" } & BindingOmit<CfR2Bucket>)
 	| ({ type: "d1" } & Omit<CfD1Database, "binding">)
 	| ({ type: "vectorize" } & Omit<CfVectorize, "binding">)
-	| ({ type: "constellation" } & Omit<CfConstellation, "binding">)
 	| ({ type: "hyperdrive" } & Omit<CfHyperdrive, "binding">)
 	| ({ type: "service" } & Omit<CfService, "binding">)
 	| { type: "fetcher"; fetcher: ServiceFetch }
@@ -260,7 +262,8 @@ export type Binding =
 	| ({ type: "dispatch_namespace" } & Omit<CfDispatchNamespace, "binding">)
 	| ({ type: "mtls_certificate" } & Omit<CfMTlsCertificate, "binding">)
 	| ({ type: "logfwdr" } & Omit<CfLogfwdrBinding, "name">)
-	| { type: `unsafe_${string}` };
+	| { type: `unsafe_${string}` }
+	| { type: "assets" };
 
 export type ServiceFetch = (request: Request) => Promise<Response> | Response;
 

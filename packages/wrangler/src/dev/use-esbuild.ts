@@ -4,23 +4,22 @@ import path from "node:path";
 import { watch } from "chokidar";
 import { useApp } from "ink";
 import { useEffect, useState } from "react";
-import { rewriteNodeCompatBuildFailure } from "../deployment-bundle/build-failures";
 import { bundleWorker } from "../deployment-bundle/bundle";
 import { getBundleType } from "../deployment-bundle/bundle-type";
 import { dedupeModulesByName } from "../deployment-bundle/dedupe-modules";
+import { logBuildOutput } from "../deployment-bundle/esbuild-plugins/log-build-output";
 import { findAdditionalModules as doFindAdditionalModules } from "../deployment-bundle/find-additional-modules";
 import {
 	createModuleCollector,
 	getWrangler1xLegacyModuleReferences,
 	noopModuleCollector,
 } from "../deployment-bundle/module-collection";
-import { logBuildFailure, logBuildWarnings } from "../logger";
 import type { Config } from "../config";
 import type { SourceMapMetadata } from "../deployment-bundle/bundle";
 import type { Entry } from "../deployment-bundle/entry";
 import type { NodeJSCompatMode } from "../deployment-bundle/node-compat";
 import type { CfModule, CfModuleType } from "../deployment-bundle/worker";
-import type { BuildResult, Metafile, PluginBuild } from "esbuild";
+import type { Metafile } from "esbuild";
 
 export type EsbuildBundle = {
 	id: number;
@@ -42,10 +41,10 @@ export type EsbuildBundleProps = {
 	processEntrypoint: boolean;
 	additionalModules: CfModule[];
 	rules: Config["rules"];
-	assets: Config["assets"];
+	legacyAssets: Config["legacy_assets"];
 	define: Config["define"];
 	alias: Config["alias"];
-	serveAssetsFromWorker: boolean;
+	serveLegacyAssetsFromWorker: boolean;
 	tsconfig: string | undefined;
 	minify: boolean | undefined;
 	nodejsCompatMode: NodeJSCompatMode | undefined;
@@ -70,8 +69,8 @@ export function runBuild(
 		processEntrypoint,
 		additionalModules,
 		rules,
-		assets,
-		serveAssetsFromWorker,
+		legacyAssets,
+		serveLegacyAssetsFromWorker,
 		tsconfig,
 		minify,
 		nodejsCompatMode,
@@ -94,10 +93,10 @@ export function runBuild(
 		processEntrypoint: boolean;
 		additionalModules: CfModule[];
 		rules: Config["rules"];
-		assets: Config["assets"];
+		legacyAssets: Config["legacy_assets"];
 		define: Config["define"];
 		alias: Config["alias"];
-		serveAssetsFromWorker: boolean;
+		serveLegacyAssetsFromWorker: boolean;
 		tsconfig: string | undefined;
 		minify: boolean | undefined;
 		nodejsCompatMode: NodeJSCompatMode | undefined;
@@ -161,38 +160,6 @@ export function runBuild(
 		});
 	}
 
-	let bundled = false;
-	const onEnd = {
-		name: "on-end",
-		setup(b: PluginBuild) {
-			b.onStart(() => {
-				onStart();
-			});
-			b.onEnd(async (result: BuildResult) => {
-				const errors = result.errors;
-				const warnings = result.warnings;
-				if (errors.length > 0) {
-					if (nodejsCompatMode !== "legacy") {
-						rewriteNodeCompatBuildFailure(result.errors);
-					}
-					logBuildFailure(errors, warnings);
-					return;
-				}
-
-				if (warnings.length > 0) {
-					logBuildWarnings(warnings);
-				}
-
-				if (!bundled) {
-					// First bundle, no need to update bundle
-					bundled = true;
-				} else {
-					await updateBundle();
-				}
-			});
-		},
-	};
-
 	async function build() {
 		if (!destination) {
 			return;
@@ -205,7 +172,7 @@ export function runBuild(
 						bundle: !noBundle,
 						moduleCollector,
 						additionalModules: newAdditionalModules,
-						serveAssetsFromWorker,
+						serveLegacyAssetsFromWorker,
 						jsxFactory,
 						jsxFragment,
 						watch: true,
@@ -216,12 +183,12 @@ export function runBuild(
 						alias,
 						define,
 						checkFetch: true,
-						assets,
+						legacyAssets,
 						// disable the cache in dev
 						bypassAssetCache: true,
 						targetConsumer,
 						testScheduled,
-						plugins: [onEnd],
+						plugins: [logBuildOutput(nodejsCompatMode, onStart, updateBundle)],
 						local,
 						projectRoot,
 						defineNavigatorUserAgent,
@@ -288,8 +255,8 @@ export function useEsbuild({
 	processEntrypoint,
 	additionalModules,
 	rules,
-	assets,
-	serveAssetsFromWorker,
+	legacyAssets,
+	serveLegacyAssetsFromWorker,
 	tsconfig,
 	minify,
 	nodejsCompatMode,
@@ -318,8 +285,8 @@ export function useEsbuild({
 				processEntrypoint,
 				additionalModules,
 				rules,
-				assets,
-				serveAssetsFromWorker,
+				legacyAssets,
+				serveLegacyAssetsFromWorker,
 				tsconfig,
 				minify,
 				nodejsCompatMode,
@@ -347,7 +314,7 @@ export function useEsbuild({
 		destination,
 		jsxFactory,
 		jsxFragment,
-		serveAssetsFromWorker,
+		serveLegacyAssetsFromWorker,
 		processEntrypoint,
 		additionalModules,
 		rules,
@@ -359,7 +326,7 @@ export function useEsbuild({
 		nodejsCompatMode,
 		alias,
 		define,
-		assets,
+		legacyAssets,
 		durableObjects,
 		local,
 		targetConsumer,

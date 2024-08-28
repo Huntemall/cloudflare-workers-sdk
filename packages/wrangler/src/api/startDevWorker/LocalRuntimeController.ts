@@ -92,7 +92,7 @@ async function convertToConfigBundle(
 		compatibilityFlags: event.config.compatibilityFlags,
 		bindings,
 		workerDefinitions: event.config.dev?.registry,
-		assetPaths: event.config.legacy?.site?.bucket
+		legacyAssetPaths: event.config.legacy?.site?.bucket
 			? {
 					baseDirectory: event.config.legacy?.site?.bucket,
 					assetDirectory: "",
@@ -100,6 +100,7 @@ async function convertToConfigBundle(
 					includePatterns: event.config.legacy?.site?.include ?? [],
 				}
 			: undefined,
+		experimentalAssets: event.config.experimental?.assets,
 		initialPort: undefined,
 		initialIp: "127.0.0.1",
 		rules: [],
@@ -150,6 +151,7 @@ export class LocalRuntimeController extends RuntimeController {
 					await convertToConfigBundle(data),
 					this.#proxyToUserWorkerAuthenticationSecret
 				);
+			options.liveReload = false; // TODO: set in buildMiniflareOptions once old code path is removed
 			if (this.#mf === undefined) {
 				logger.log(chalk.dim("⎔ Starting local server..."));
 
@@ -197,6 +199,7 @@ export class LocalRuntimeController extends RuntimeController {
 					userWorkerInnerUrlOverrides: {
 						protocol: data.config?.dev?.origin?.secure ? "https:" : "http:",
 						hostname: data.config?.dev?.origin?.hostname,
+						port: data.config?.dev?.origin?.hostname ? "" : undefined,
 					},
 					headers: {
 						// Passing this signature from Proxy Worker allows the User Worker to trust the request.

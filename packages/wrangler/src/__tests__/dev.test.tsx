@@ -18,7 +18,10 @@ import {
 } from "./helpers/msw";
 import { runInTempDir } from "./helpers/run-in-tmp";
 import { runWrangler } from "./helpers/run-wrangler";
-import writeWranglerToml from "./helpers/write-wrangler-toml";
+import {
+	writeWranglerJson,
+	writeWranglerToml,
+} from "./helpers/write-wrangler-toml";
 import type { Mock } from "vitest";
 
 async function expectedHostAndZone(
@@ -70,6 +73,53 @@ describe("wrangler dev", () => {
 		msw.resetHandlers();
 	});
 
+	describe("config file support", () => {
+		it("should support wrangler.toml", async () => {
+			writeWranglerToml({
+				name: "test-worker-toml",
+				main: "index.js",
+				compatibility_date: "2024-01-01",
+			});
+			fs.writeFileSync("index.js", `export default {};`);
+
+			await runWrangler("dev");
+			expect(std.out).toMatchInlineSnapshot(`""`);
+			expect(std.err).toMatchInlineSnapshot(`""`);
+			expect(std.warn).toMatchInlineSnapshot(`""`);
+		});
+
+		it("should support wrangler.json", async () => {
+			writeWranglerJson({
+				name: "test-worker-json",
+				main: "index.js",
+				compatibility_date: "2024-01-01",
+			});
+			fs.writeFileSync("index.js", `export default {};`);
+
+			await runWrangler("dev --experimental-json-config");
+			expect(std.out).toMatchInlineSnapshot(`""`);
+			expect(std.err).toMatchInlineSnapshot(`""`);
+			expect(std.warn).toMatchInlineSnapshot(`""`);
+		});
+
+		it("should support wrangler.jsonc", async () => {
+			writeWranglerJson(
+				{
+					name: "test-worker-jsonc",
+					main: "index.js",
+					compatibility_date: "2024-01-01",
+				},
+				"wrangler.jsonc"
+			);
+			fs.writeFileSync("index.js", `export default {};`);
+
+			await runWrangler("dev --experimental-json-config");
+			expect(std.out).toMatchInlineSnapshot(`""`);
+			expect(std.err).toMatchInlineSnapshot(`""`);
+			expect(std.warn).toMatchInlineSnapshot(`""`);
+		});
+	});
+
 	describe("authorization", () => {
 		mockApiToken({ apiToken: null });
 		const isCISpy = vi.spyOn(CI, "isCI").mockReturnValue(true);
@@ -79,7 +129,7 @@ describe("wrangler dev", () => {
 			await expect(
 				runWrangler("dev --remote index.js")
 			).rejects.toThrowErrorMatchingInlineSnapshot(
-				`"You must be logged in to use wrangler dev in remote mode. Try logging in, or run wrangler dev --local."`
+				`[Error: You must be logged in to use wrangler dev in remote mode. Try logging in, or run wrangler dev --local.]`
 			);
 		});
 
@@ -167,7 +217,7 @@ describe("wrangler dev", () => {
 			await expect(
 				runWrangler("dev")
 			).rejects.toThrowErrorMatchingInlineSnapshot(
-				`"Missing entry-point: The entry-point should be specified via the command line (e.g. \`wrangler dev path/to/script\`) or the \`main\` config field."`
+				`[Error: Missing entry-point: The entry-point should be specified via the command line (e.g. \`wrangler dev path/to/script\`) or the \`main\` config field.]`
 			);
 
 			expect(std.out).toMatchInlineSnapshot(`""`);
@@ -248,6 +298,7 @@ describe("wrangler dev", () => {
 			);
 		});
 	});
+
 	describe("host", () => {
 		it("should resolve a host to its zone", async () => {
 			writeWranglerToml({
@@ -400,9 +451,9 @@ describe("wrangler dev", () => {
 			await fs.promises.writeFile("index.js", `export default {};`);
 			await expect(runWrangler("dev --remote")).rejects
 				.toThrowErrorMatchingInlineSnapshot(`
-			"Could not find zone for \`does-not-exist.com\`. Make sure the domain is set up to be proxied by Cloudflare.
-			For more details, refer to https://developers.cloudflare.com/workers/configuration/routing/routes/#set-up-a-route"
-		`);
+				[Error: Could not find zone for \`does-not-exist.com\`. Make sure the domain is set up to be proxied by Cloudflare.
+				For more details, refer to https://developers.cloudflare.com/workers/configuration/routing/routes/#set-up-a-route]
+			`);
 		});
 
 		it("should fallback to zone_name when given the pattern */*", async () => {
@@ -553,9 +604,9 @@ describe("wrangler dev", () => {
 			mockGetZones("some-host.com", []);
 			await expect(runWrangler("dev --remote --host some-host.com")).rejects
 				.toThrowErrorMatchingInlineSnapshot(`
-			"Could not find zone for \`some-host.com\`. Make sure the domain is set up to be proxied by Cloudflare.
-			For more details, refer to https://developers.cloudflare.com/workers/configuration/routing/routes/#set-up-a-route"
-		`);
+				[Error: Could not find zone for \`some-host.com\`. Make sure the domain is set up to be proxied by Cloudflare.
+				For more details, refer to https://developers.cloudflare.com/workers/configuration/routing/routes/#set-up-a-route]
+			`);
 		});
 
 		it("should not try to resolve a zone when starting in local mode", async () => {
@@ -669,9 +720,9 @@ describe("wrangler dev", () => {
 
 			await expect(runWrangler("dev")).rejects
 				.toThrowErrorMatchingInlineSnapshot(`
-			"The expected output file at \\"index.js\\" was not found after running custom build: node -e \\"4+4;\\".
-			The \`main\` property in wrangler.toml should point to the file generated by the custom build."
-		`);
+				[Error: The expected output file at "index.js" was not found after running custom build: node -e "4+4;".
+				The \`main\` property in wrangler.toml should point to the file generated by the custom build.]
+			`);
 			expect(std.out).toMatchInlineSnapshot(`
 			"Running custom build: node -e \\"4+4;\\"
 			"
@@ -703,8 +754,9 @@ describe("wrangler dev", () => {
 				});
 
 				// We won't overwrite existing process.env keys with .env values (to
-				// allow .env overrides to specified on then shell), so make sure this
+				// allow .env overrides to be specified on the shell), so make sure this
 				// key definitely doesn't exist.
+				vi.stubEnv("CUSTOM_BUILD_VAR", "");
 				delete process.env.CUSTOM_BUILD_VAR;
 			});
 
@@ -941,9 +993,9 @@ describe("wrangler dev", () => {
 			fs.writeFileSync("index.js", `export default {};`);
 			await expect(runWrangler("dev")).rejects
 				.toThrowErrorMatchingInlineSnapshot(`
-						"Processing wrangler.toml configuration:
-						  - Expected \\"dev.inspector_port\\" to be of type number but got \\"some string\\"."
-					`);
+				[Error: Processing wrangler.toml configuration:
+				  - Expected "dev.inspector_port" to be of type number but got "some string".]
+			`);
 		});
 	});
 
@@ -989,9 +1041,9 @@ describe("wrangler dev", () => {
 			fs.writeFileSync("index.js", `export default {};`);
 			await expect(runWrangler("dev")).rejects
 				.toThrowErrorMatchingInlineSnapshot(`
-						"Processing wrangler.toml configuration:
-						  - Expected \\"dev.port\\" to be of type number but got \\"some string\\"."
-					`);
+				[Error: Processing wrangler.toml configuration:
+				  - Expected "dev.port" to be of type number but got "some string".]
+			`);
 		});
 
 		it("should use --port command line arg, if provided", async () => {
@@ -1178,82 +1230,85 @@ describe("wrangler dev", () => {
 			await expect(
 				runWrangler("dev --site")
 			).rejects.toThrowErrorMatchingInlineSnapshot(
-				`"Not enough arguments following: site"`
+				`[Error: Not enough arguments following: site]`
 			);
 
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mNot enough arguments following: site[0m
+				Object {
+				  "debug": "",
+				  "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mNot enough arguments following: site[0m
 
-			",
-			  "info": "",
-			  "out": "
-			wrangler dev [script]
+				",
+				  "info": "",
+				  "out": "
+				wrangler dev [script]
 
-			Start a local server for developing a worker
+				👂 Start a local server for developing your Worker
 
-			Positionals:
-			  script  The path to an entry point for your worker  [string]
+				POSITIONALS
+				  script  The path to an entry point for your worker  [string]
 
-			Global Flags:
-			  -j, --experimental-json-config  ⚑Experimental: support wrangler.json  [boolean]
-			  -c, --config                    ⚑Path to .toml configuration file  [string]
-			  -e, --env                       ⚑Environment to use for operations and .env files  [string]
-			  -h, --help                      ⚑Show help  [boolean]
-			  -v, --version                   ⚑Show version number  [boolean]
+				GLOBAL FLAGS
+				  -j, --experimental-json-config  Experimental: support wrangler.json  [boolean]
+				  -c, --config                    Path to .toml configuration file  [string]
+				  -e, --env                       Environment to use for operations and .env files  [string]
+				  -h, --help                      Show help  [boolean]
+				  -v, --version                   Show version number  [boolean]
 
-			Options:
-			      --name                                       Name of the worker  [string]
-			      --no-bundle                                  Skip internal build steps and directly deploy script  [boolean] [default: false]
-			      --compatibility-date                         Date to use for compatibility checks  [string]
-			      --compatibility-flags, --compatibility-flag  Flags to use for compatibility checks  [array]
-			      --latest                                     Use the latest version of the worker runtime  [boolean] [default: true]
-			      --ip                                         IP address to listen on  [string]
-			      --port                                       Port to listen on  [number]
-			      --inspector-port                             Port for devtools to connect to  [number]
-			      --routes, --route                            Routes to upload  [array]
-			      --host                                       Host to forward requests to, defaults to the zone of project  [string]
-			      --local-protocol                             Protocol to listen to requests on, defaults to http.  [choices: \\"http\\", \\"https\\"]
-			      --https-key-path                             Path to a custom certificate key  [string]
-			      --https-cert-path                            Path to a custom certificate  [string]
-			      --local-upstream                             Host to act as origin in local mode, defaults to dev.host or route  [string]
-			      --assets                                     Static assets to be served  [string]
-			      --site                                       Root folder of static assets for Workers Sites  [string]
-			      --site-include                               Array of .gitignore-style patterns that match file or directory names from the sites directory. Only matched items will be uploaded.  [array]
-			      --site-exclude                               Array of .gitignore-style patterns that match file or directory names from the sites directory. Matched items will not be uploaded.  [array]
-			      --upstream-protocol                          Protocol to forward requests to host on, defaults to https.  [choices: \\"http\\", \\"https\\"]
-			      --var                                        A key-value pair to be injected into the script as a variable  [array]
-			      --define                                     A key-value pair to be substituted in the script  [array]
-			      --jsx-factory                                The function that is called for each JSX element  [string]
-			      --jsx-fragment                               The function that is called for each JSX fragment  [string]
-			      --tsconfig                                   Path to a custom tsconfig.json file  [string]
-			  -r, --remote                                     Run on the global Cloudflare network with access to production resources  [boolean] [default: false]
-			      --minify                                     Minify the script  [boolean]
-			      --node-compat                                Enable Node.js compatibility  [boolean]
-			      --persist-to                                 Specify directory to use for local persistence (defaults to .wrangler/state)  [string]
-			      --live-reload                                Auto reload HTML pages when change is detected in local mode  [boolean]
-			      --test-scheduled                             Test scheduled events by visiting /__scheduled in browser  [boolean] [default: false]
-			      --log-level                                  Specify logging level  [choices: \\"debug\\", \\"info\\", \\"log\\", \\"warn\\", \\"error\\", \\"none\\"] [default: \\"log\\"]
-			      --show-interactive-dev-session               Show interactive dev session  (defaults to true if the terminal supports interactivity)  [boolean]",
-			  "warn": "",
-			}
-		`);
+				OPTIONS
+				      --name                                       Name of the worker  [string]
+				      --no-bundle                                  Skip internal build steps and directly deploy script  [boolean] [default: false]
+				      --compatibility-date                         Date to use for compatibility checks  [string]
+				      --compatibility-flags, --compatibility-flag  Flags to use for compatibility checks  [array]
+				      --latest                                     Use the latest version of the worker runtime  [boolean] [default: true]
+				      --ip                                         IP address to listen on  [string]
+				      --port                                       Port to listen on  [number]
+				      --inspector-port                             Port for devtools to connect to  [number]
+				      --routes, --route                            Routes to upload  [array]
+				      --host                                       Host to forward requests to, defaults to the zone of project  [string]
+				      --local-protocol                             Protocol to listen to requests on, defaults to http.  [choices: \\"http\\", \\"https\\"]
+				      --https-key-path                             Path to a custom certificate key  [string]
+				      --https-cert-path                            Path to a custom certificate  [string]
+				      --local-upstream                             Host to act as origin in local mode, defaults to dev.host or route  [string]
+				      --legacy-assets                              (Experimental) Static assets to be served  [string]
+				      --site                                       Root folder of static assets for Workers Sites  [string]
+				      --site-include                               Array of .gitignore-style patterns that match file or directory names from the sites directory. Only matched items will be uploaded.  [array]
+				      --site-exclude                               Array of .gitignore-style patterns that match file or directory names from the sites directory. Matched items will not be uploaded.  [array]
+				      --upstream-protocol                          Protocol to forward requests to host on, defaults to https.  [choices: \\"http\\", \\"https\\"]
+				      --var                                        A key-value pair to be injected into the script as a variable  [array]
+				      --define                                     A key-value pair to be substituted in the script  [array]
+				      --alias                                      A module pair to be substituted in the script  [array]
+				      --jsx-factory                                The function that is called for each JSX element  [string]
+				      --jsx-fragment                               The function that is called for each JSX fragment  [string]
+				      --tsconfig                                   Path to a custom tsconfig.json file  [string]
+				  -r, --remote                                     Run on the global Cloudflare network with access to production resources  [boolean] [default: false]
+				      --minify                                     Minify the script  [boolean]
+				      --node-compat                                Enable Node.js compatibility  [boolean]
+				      --persist-to                                 Specify directory to use for local persistence (defaults to .wrangler/state)  [string]
+				      --live-reload                                Auto reload HTML pages when change is detected in local mode  [boolean]
+				      --test-scheduled                             Test scheduled events by visiting /__scheduled in browser  [boolean] [default: false]
+				      --log-level                                  Specify logging level  [choices: \\"debug\\", \\"info\\", \\"log\\", \\"warn\\", \\"error\\", \\"none\\"] [default: \\"log\\"]
+				      --show-interactive-dev-session               Show interactive dev session  (defaults to true if the terminal supports interactivity)  [boolean]
+				      --experimental-dev-env, --x-dev-env          Use the experimental DevEnv instantiation (unified across wrangler dev and unstable_dev)  [boolean] [default: false]
+				      --experimental-registry, --x-registry        Use the experimental file based dev registry for multi-worker development  [boolean] [default: false]",
+				  "warn": "",
+				}
+			`);
 		});
 
-		it("should error if --assets and --site are used together", async () => {
+		it("should error if --legacy-assets and --site are used together", async () => {
 			writeWranglerToml({
 				main: "./index.js",
 			});
 			fs.writeFileSync("index.js", `export default {};`);
 			await expect(
-				runWrangler("dev --assets abc --site xyz")
+				runWrangler("dev --legacy-assets abc --site xyz")
 			).rejects.toThrowErrorMatchingInlineSnapshot(
-				`"Cannot use Assets and Workers Sites in the same Worker."`
+				`[Error: Cannot use Legacy Assets and Workers Sites in the same Worker.]`
 			);
 		});
 
-		it("should error if --assets and config.site are used together", async () => {
+		it("should error if --legacy-assets and config.site are used together", async () => {
 			writeWranglerToml({
 				main: "./index.js",
 				site: {
@@ -1262,38 +1317,38 @@ describe("wrangler dev", () => {
 			});
 			fs.writeFileSync("index.js", `export default {};`);
 			await expect(
-				runWrangler("dev --assets abc")
+				runWrangler("dev --legacy-assets abc")
 			).rejects.toThrowErrorMatchingInlineSnapshot(
-				`"Cannot use Assets and Workers Sites in the same Worker."`
+				`[Error: Cannot use Legacy Assets and Workers Sites in the same Worker.]`
 			);
 		});
 
-		it("should error if config.assets and --site are used together", async () => {
+		it("should error if config.legacy_assets and --site are used together", async () => {
 			writeWranglerToml({
 				main: "./index.js",
-				assets: "abc",
+				legacy_assets: "abc",
 			});
 			fs.writeFileSync("index.js", `export default {};`);
 			await expect(
 				runWrangler("dev --site xyz")
 			).rejects.toThrowErrorMatchingInlineSnapshot(
-				`"Cannot use Assets and Workers Sites in the same Worker."`
+				`[Error: Cannot use Legacy Assets and Workers Sites in the same Worker.]`
 			);
 		});
 
-		it("should error if config.assets and config.site are used together", async () => {
+		it("should error if config.legacy_assets and config.site are used together", async () => {
 			writeWranglerToml({
 				main: "./index.js",
-				assets: "abc",
+				legacy_assets: "abc",
 				site: {
 					bucket: "xyz",
 				},
 			});
 			fs.writeFileSync("index.js", `export default {};`);
 			await expect(
-				runWrangler("dev --assets abc")
+				runWrangler("dev --legacy-assets abc")
 			).rejects.toThrowErrorMatchingInlineSnapshot(
-				`"Cannot use Assets and Workers Sites in the same Worker."`
+				`[Error: Cannot use Legacy Assets and Workers Sites in the same Worker.]`
 			);
 		});
 
@@ -1309,10 +1364,11 @@ describe("wrangler dev", () => {
 			await runWrangler("dev --site abc");
 			expect((Dev as Mock).mock.calls[1][0].isWorkersSite).toEqual(true);
 
-			await runWrangler("dev --assets abc");
+			await runWrangler("dev --legacy-assets abc");
 			expect((Dev as Mock).mock.calls[2][0].isWorkersSite).toEqual(false);
 		});
-		it("should warn if --assets is used", async () => {
+
+		it("should point to --legacy-assets if --assets is used", async () => {
 			writeWranglerToml({
 				main: "./index.js",
 			});
@@ -1320,39 +1376,186 @@ describe("wrangler dev", () => {
 
 			await runWrangler('dev --assets "./assets"');
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "",
-			  "info": "",
-			  "out": "",
-			  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --assets argument is experimental and may change or break at any time[0m
+				Object {
+				  "debug": "",
+				  "err": "",
+				  "info": "",
+				  "out": "",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --assets argument is experimental. We are going to be changing the behavior of this experimental command after August 15th.[0m
 
-			",
-			}
-		`);
+				  Releases of wrangler after this date will no longer support current functionality.
+				  Please shift to the --legacy-assets command to preserve the current functionality.
+
+				",
+				}
+			`);
 		});
 
-		it("should warn if config.assets is used", async () => {
+		it("should warn if --legacy-assets is used", async () => {
 			writeWranglerToml({
 				main: "./index.js",
-				assets: "./assets",
 			});
 			fs.writeFileSync("index.js", `export default {};`);
 
-			await runWrangler("dev");
+			await runWrangler('dev --legacy-assets "./assets"');
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "",
-			  "info": "",
-			  "out": "",
-			  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mProcessing wrangler.toml configuration:[0m
+				Object {
+				  "debug": "",
+				  "err": "",
+				  "info": "",
+				  "out": "",
+				  "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe --legacy-assets argument is experimental and may change or break at any time.[0m
 
-			    - \\"assets\\" fields are experimental and may change or break at any time.
+				",
+				}
+			`);
+		});
 
-			",
-			}
-		`);
+		it("should warn if config.legacy_assets is used", async () => {
+			writeWranglerToml({
+				main: "./index.js",
+				legacy_assets: "./assets",
+			});
+		});
+	});
+
+	describe("--experimental-assets", () => {
+		it("should not require entry point if using --experimental-assets", async () => {
+			fs.openSync("assets", "w");
+			writeWranglerToml({
+				experimental_assets: { directory: "assets" },
+			});
+
+			await runWrangler("dev");
+		});
+
+		it("should error if config.site and config.experimental_assets are used together", async () => {
+			writeWranglerToml({
+				main: "./index.js",
+				experimental_assets: { directory: "assets" },
+				site: {
+					bucket: "xyz",
+				},
+			});
+			fs.writeFileSync("index.js", `export default {};`);
+			fs.openSync("assets", "w");
+			await expect(
+				runWrangler("dev")
+			).rejects.toThrowErrorMatchingInlineSnapshot(
+				`[Error: Cannot use Experimental Assets and Workers Sites in the same Worker.]`
+			);
+		});
+
+		it("should error if config.site and --experimental-assets are used together", async () => {
+			writeWranglerToml({
+				main: "./index.js",
+				site: {
+					bucket: "xyz",
+				},
+			});
+			fs.writeFileSync("index.js", `export default {};`);
+			fs.openSync("assets", "w");
+			await expect(
+				runWrangler("dev --experimental-assets assets")
+			).rejects.toThrowErrorMatchingInlineSnapshot(
+				`[Error: Cannot use Experimental Assets and Workers Sites in the same Worker.]`
+			);
+		});
+
+		it("should error if config.experimental_assets and config.legacy_assets are used together", async () => {
+			writeWranglerToml({
+				main: "./index.js",
+				experimental_assets: { directory: "assets" },
+				legacy_assets: {
+					bucket: "xyz",
+					include: [],
+					exclude: [],
+					browser_TTL: undefined,
+					serve_single_page_app: true,
+				},
+			});
+			fs.writeFileSync("index.js", `export default {};`);
+			fs.openSync("assets", "w");
+			await expect(
+				runWrangler("dev")
+			).rejects.toThrowErrorMatchingInlineSnapshot(
+				`[Error: Cannot use Legacy Assets and Experimental Assets in the same Worker.]`
+			);
+		});
+
+		it("should error if --experimental-assets and --legacy-assets are used together", async () => {
+			fs.writeFileSync("index.js", `export default {};`);
+			fs.openSync("assets", "w");
+			await expect(
+				runWrangler("dev --experimental-assets assets --legacy-assets assets")
+			).rejects.toThrowErrorMatchingInlineSnapshot(
+				`[Error: Cannot use Legacy Assets and Experimental Assets in the same Worker.]`
+			);
+		});
+
+		it("should error if --experimental-assets and config.legacy_assets are used together", async () => {
+			writeWranglerToml({
+				main: "./index.js",
+				legacy_assets: {
+					bucket: "xyz",
+					include: [],
+					exclude: [],
+					browser_TTL: undefined,
+					serve_single_page_app: true,
+				},
+			});
+			fs.writeFileSync("index.js", `export default {};`);
+			fs.openSync("assets", "w");
+			await expect(
+				runWrangler("dev --experimental-assets assets")
+			).rejects.toThrowErrorMatchingInlineSnapshot(
+				`[Error: Cannot use Legacy Assets and Experimental Assets in the same Worker.]`
+			);
+		});
+
+		it("should error if config.experimental_assets and --legacy-assets are used together", async () => {
+			writeWranglerToml({
+				main: "./index.js",
+				experimental_assets: {
+					directory: "xyz",
+				},
+			});
+			fs.writeFileSync("index.js", `export default {};`);
+			fs.openSync("xyz", "w");
+			await expect(
+				runWrangler("dev --legacy-assets xyz")
+			).rejects.toThrowErrorMatchingInlineSnapshot(
+				`[Error: Cannot use Legacy Assets and Experimental Assets in the same Worker.]`
+			);
+		});
+
+		it("should error if directory specified by '--experimental-assets' command line argument does not exist", async () => {
+			writeWranglerToml({
+				main: "./index.js",
+			});
+			fs.writeFileSync("index.js", `export default {};`);
+			await expect(
+				runWrangler("dev --experimental-assets abc")
+			).rejects.toThrow(
+				new RegExp(
+					'^The directory specified by the "--experimental-assets" command line argument does not exist:[Ss]*'
+				)
+			);
+		});
+
+		it("should error if directory specified by '[experimental_assets]' configuration key does not exist", async () => {
+			writeWranglerToml({
+				main: "./index.js",
+				experimental_assets: {
+					directory: "abc",
+				},
+			});
+			fs.writeFileSync("index.js", `export default {};`);
+			await expect(runWrangler("dev")).rejects.toThrow(
+				new RegExp(
+					'^The directory specified by the "experimental_assets.directory" field in your configuration file does not exist:[Ss]*'
+				)
+			);
 		});
 	});
 
@@ -1564,7 +1767,7 @@ describe("wrangler dev", () => {
 					"dev index.js --compatibility-flag=nodejs_compat --node-compat"
 				)
 			).rejects.toThrowErrorMatchingInlineSnapshot(
-				`"The \`nodejs_compat\` compatibility flag cannot be used in conjunction with the legacy \`--node-compat\` flag. If you want to use the Workers runtime Node.js compatibility features, please remove the \`--node-compat\` argument from your CLI command or \`node_compat = true\` from your config file."`
+				`[Error: The \`nodejs_compat\` compatibility flag cannot be used in conjunction with the legacy \`--node-compat\` flag. If you want to use the Workers \`nodejs_compat\` compatibility flag, please remove the \`--node-compat\` argument from your CLI command or \`node_compat = true\` from your config file.]`
 			);
 		});
 	});
@@ -1575,7 +1778,7 @@ function mockGetZones(domain: string, zones: { id: string }[] = []) {
 		http.get("*/zones", ({ request }) => {
 			const url = new URL(request.url);
 
-			expect([...url.searchParams.entries()]).toEqual([["name", domain]]);
+			expect(url.searchParams.get("name")).toEqual(domain);
 
 			return HttpResponse.json(
 				{

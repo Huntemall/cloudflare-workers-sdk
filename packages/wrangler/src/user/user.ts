@@ -350,7 +350,6 @@ const DefaultScopes = {
 		"See and change Cloudflare Pages projects, settings and deployments.",
 	"zone:read": "Grants read level access to account zone.",
 	"ssl_certs:write": "See and manage mTLS certificates for your account",
-	"constellation:write": "Manage Constellation projects/models",
 	"ai:write": "See and change Workers AI catalog and assets",
 	"queues:write": "See and change Cloudflare Queues settings and data",
 } as const;
@@ -369,9 +368,9 @@ const AllScopes = {
  *
  * "offline_access" is automatically included.
  */
-type Scope = keyof typeof AllScopes;
+export type Scope = keyof typeof AllScopes;
 
-let DefaultScopeKeys = Object.keys(DefaultScopes) as Scope[];
+export let DefaultScopeKeys = Object.keys(DefaultScopes) as Scope[];
 
 export function setLoginScopeKeys(scopes: Scope[]) {
 	DefaultScopeKeys = scopes;
@@ -1285,7 +1284,7 @@ async function getJSONFromResponse(response: Response) {
 			);
 			if (text.match(/challenge-platform/)) {
 				logger.error(
-					"It looks like you might have hit a bot challenge page. This may be transient but if not, please contact Cloudflare to find out what can be done."
+					`It looks like you might have hit a bot challenge page. This may be transient but if not, please contact Cloudflare to find out what can be done. When you contact Cloudflare, please provide your Ray ID: ${response.headers.get("cf-ray")}`
 				);
 			}
 		}

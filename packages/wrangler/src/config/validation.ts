@@ -2,7 +2,6 @@ import assert from "node:assert";
 import path from "node:path";
 import TOML from "@iarna/toml";
 import { dedent } from "ts-dedent";
-import { getConstellationWarningFromEnv } from "../constellation/utils";
 import { Diagnostics } from "./diagnostics";
 import {
 	all,
@@ -15,6 +14,7 @@ import {
 	inheritableInLegacyEnvironments,
 	isBoolean,
 	isMutuallyExclusiveWith,
+	isNonEmptyString,
 	isObjectWith,
 	isOneOf,
 	isOptionalProperty,
@@ -34,11 +34,12 @@ import type {
 	DeprecatedUpload,
 	DispatchNamespaceOutbound,
 	Environment,
+	ExperimentalAssets,
 	RawEnvironment,
 	Rule,
 	TailConsumer,
 } from "./environment";
-import type { ValidatorFn } from "./validation-helpers";
+import type { TypeofType, ValidatorFn } from "./validation-helpers";
 
 export type NormalizeAndValidateConfigArgs = {
 	name?: string;
@@ -243,6 +244,25 @@ export function normalizeAndValidateConfig(
 		}
 	}
 
+	deprecated(
+		diagnostics,
+		rawConfig,
+		"assets",
+		`The \`assets\` feature is experimental. We are going to be changing its behavior after August 15th.\n` +
+			`Releases of wrangler after this date will no longer support current functionality.\n` +
+			`Please shift to \`legacy_assets\` to preserve the current functionality. `,
+		false,
+		"Behavior change"
+	);
+
+	experimental(diagnostics, rawConfig, "legacy_assets");
+
+	if (rawConfig.assets && rawConfig.legacy_assets) {
+		diagnostics.errors.push(
+			"Expected only one of `assets` or `legacy_assets`."
+		);
+	}
+
 	// Process the top-level default environment configuration.
 	const config: Config = {
 		configPath,
@@ -261,7 +281,11 @@ export function normalizeAndValidateConfig(
 			rawConfig,
 			activeEnv.main
 		),
-		assets: normalizeAndValidateAssets(diagnostics, configPath, rawConfig),
+		legacy_assets: normalizeAndValidateLegacyAssets(
+			diagnostics,
+			configPath,
+			rawConfig
+		),
 		alias: normalizeAndValidateAliases(diagnostics, configPath, rawConfig),
 		wasm_modules: normalizeAndValidateModulePaths(
 			diagnostics,
@@ -289,10 +313,8 @@ export function normalizeAndValidateConfig(
 		diagnostics,
 		"top-level",
 		Object.keys(rawConfig),
-		[...Object.keys(config), "env", "$schema"]
+		[...Object.keys(config), "env", "$schema", "assets"]
 	);
-
-	experimental(diagnostics, rawConfig, "assets");
 
 	return { config, diagnostics };
 }
@@ -652,19 +674,22 @@ function normalizeAndValidateAliases(
 }
 
 /**
- * Validate the `assets` configuration and return normalized values.
+ * Validate the `legacy_assets` configuration and return normalized values.
  */
-function normalizeAndValidateAssets(
+function normalizeAndValidateLegacyAssets(
 	diagnostics: Diagnostics,
 	configPath: string | undefined,
 	rawConfig: RawConfig
-): Config["assets"] {
+): Config["legacy_assets"] {
+	// So that the final config object only has the one legacy_assets property
+	const mergedAssetsConfig = rawConfig["legacy_assets"] ?? rawConfig["assets"];
+
 	// Even though the type doesn't say it,
 	// we allow for a string input in the config,
 	// so let's normalise it
-	if (typeof rawConfig?.assets === "string") {
+	if (typeof mergedAssetsConfig === "string") {
 		return {
-			bucket: rawConfig.assets,
+			bucket: mergedAssetsConfig,
 			include: [],
 			exclude: [],
 			browser_TTL: undefined,
@@ -672,13 +697,15 @@ function normalizeAndValidateAssets(
 		};
 	}
 
-	if (rawConfig?.assets === undefined) {
+	if (mergedAssetsConfig === undefined) {
 		return undefined;
 	}
 
-	if (typeof rawConfig.assets !== "object") {
+	const fieldName = rawConfig["assets"] ? "assets" : "legacy_assets";
+
+	if (typeof mergedAssetsConfig !== "object") {
 		diagnostics.errors.push(
-			`Expected the \`assets\` field to be a string or an object, but got ${typeof rawConfig.assets}.`
+			`Expected the \`${fieldName}\` field to be a string or an object, but got ${typeof mergedAssetsConfig}.`
 		);
 		return undefined;
 	}
@@ -690,17 +717,17 @@ function normalizeAndValidateAssets(
 		browser_TTL,
 		serve_single_page_app,
 		...rest
-	} = rawConfig.assets;
+	} = mergedAssetsConfig;
 
-	validateAdditionalProperties(diagnostics, "assets", Object.keys(rest), []);
+	validateAdditionalProperties(diagnostics, fieldName, Object.keys(rest), []);
 
-	validateRequiredProperty(diagnostics, "assets", "bucket", bucket, "string");
-	validateTypedArray(diagnostics, "assets.include", include, "string");
-	validateTypedArray(diagnostics, "assets.exclude", exclude, "string");
+	validateRequiredProperty(diagnostics, fieldName, "bucket", bucket, "string");
+	validateTypedArray(diagnostics, `${fieldName}.include`, include, "string");
+	validateTypedArray(diagnostics, `${fieldName}.exclude`, exclude, "string");
 
 	validateOptionalProperty(
 		diagnostics,
-		"assets",
+		fieldName,
 		"browser_TTL",
 		browser_TTL,
 		"number"
@@ -708,7 +735,7 @@ function normalizeAndValidateAssets(
 
 	validateOptionalProperty(
 		diagnostics,
-		"assets",
+		fieldName,
 		"serve_single_page_app",
 		serve_single_page_app,
 		"boolean"
@@ -1196,6 +1223,14 @@ function normalizeAndValidateEnvironment(
 			isObjectWith("crons"),
 			{ crons: [] }
 		),
+		experimental_assets: inheritable(
+			diagnostics,
+			topLevelEnv,
+			rawEnv,
+			"experimental_assets",
+			validateAssetsConfig,
+			undefined
+		),
 		usage_model: inheritable(
 			diagnostics,
 			topLevelEnv,
@@ -1317,16 +1352,6 @@ function normalizeAndValidateEnvironment(
 			envName,
 			"vectorize",
 			validateBindingArray(envName, validateVectorizeBinding),
-			[]
-		),
-		constellation: notInheritable(
-			diagnostics,
-			topLevelEnv,
-			rawConfig,
-			rawEnv,
-			envName,
-			"constellation",
-			validateBindingArray(envName, validateConstellationBinding),
 			[]
 		),
 		hyperdrive: notInheritable(
@@ -2011,6 +2036,59 @@ const validateCflogfwdrBinding: ValidatorFn = (diagnostics, field, value) => {
 	return isValid;
 };
 
+const validateAssetsConfig: ValidatorFn = (diagnostics, field, value) => {
+	if (value === undefined) {
+		return true;
+	}
+
+	if (typeof value !== "object" || value === null) {
+		diagnostics.errors.push(
+			`"${field}" should be an object, but got value ${JSON.stringify(
+				field
+			)} of type ${typeof value}`
+		);
+		return false;
+	}
+
+	let isValid = true;
+
+	// ensure we validate all props before we show the validation errors
+	// this way users have all the necessary info to fix all errors in one go
+	isValid =
+		validateRequiredProperty(
+			diagnostics,
+			field,
+			"directory",
+			(value as ExperimentalAssets).directory,
+			"string"
+		) && isValid;
+
+	isValid =
+		isNonEmptyString(
+			diagnostics,
+			`${field}.directory`,
+			(value as ExperimentalAssets).directory,
+			undefined
+		) && isValid;
+
+	isValid =
+		validateOptionalProperty(
+			diagnostics,
+			field,
+			"binding",
+			(value as ExperimentalAssets).binding,
+			"string"
+		) && isValid;
+
+	isValid =
+		validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+			"directory",
+			"binding",
+		]) && isValid;
+
+	return isValid;
+};
+
 const validateBrowserBinding =
 	(envName: string): ValidatorFn =>
 	(diagnostics, field, value, config) => {
@@ -2119,7 +2197,6 @@ const validateUnsafeBinding: ValidatorFn = (diagnostics, field, value) => {
 			"kv_namespace",
 			"durable_object_namespace",
 			"d1_database",
-			"constellation",
 			"r2_bucket",
 			"service",
 			"logfwdr",
@@ -2205,25 +2282,33 @@ const validateBindingArray =
 	};
 
 const validateCloudchamberConfig: ValidatorFn = (diagnostics, field, value) => {
-	if (typeof value !== "object" || value === null) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		diagnostics.errors.push(
 			`"cloudchamber" should be an object, but got ${JSON.stringify(value)}`
 		);
 		return false;
 	}
 
+	const optionalAttrsByType = {
+		string: ["memory", "image", "location"],
+		boolean: ["ipv4"],
+		number: ["vcpu"],
+	};
+
 	let isValid = true;
-	const requiredKeys: string[] = [];
-	requiredKeys.forEach((key) => {
-		if (!isRequiredProperty(value, key, "string")) {
-			diagnostics.errors.push(
-				`"${field}" bindings should have a string "${key}" field but got ${JSON.stringify(
-					value
-				)}.`
-			);
-			isValid = false;
-		}
+	Object.entries(optionalAttrsByType).forEach(([attrType, attrNames]) => {
+		attrNames.forEach((key) => {
+			if (!isOptionalProperty(value, key, attrType as TypeofType)) {
+				diagnostics.errors.push(
+					`"${field}" bindings should, optionally, have a ${attrType} "${key}" field but got ${JSON.stringify(
+						value
+					)}.`
+				);
+				isValid = false;
+			}
+		});
 	});
+
 	return isValid;
 };
 
@@ -2529,51 +2614,6 @@ const validateVectorizeBinding: ValidatorFn = (diagnostics, field, value) => {
 	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
 		"binding",
 		"index_name",
-	]);
-
-	return isValid;
-};
-
-const validateConstellationBinding: ValidatorFn = (
-	diagnostics,
-	field,
-	value
-) => {
-	if (typeof value !== "object" || value === null) {
-		diagnostics.errors.push(
-			`"constellation" bindings should be objects, but got ${JSON.stringify(
-				value
-			)}`
-		);
-		return false;
-	}
-	let isValid = true;
-	// Constellation bindings must have a binding and a project.
-	if (!isRequiredProperty(value, "binding", "string")) {
-		diagnostics.errors.push(
-			`"${field}" bindings should have a string "binding" field but got ${JSON.stringify(
-				value
-			)}.`
-		);
-		isValid = false;
-	}
-	if (!isRequiredProperty(value, "project_id", "string")) {
-		diagnostics.errors.push(
-			`"${field}" bindings must have a "project_id" field but got ${JSON.stringify(
-				value
-			)}.`
-		);
-		isValid = false;
-	}
-	if (isValid && getConstellationWarningFromEnv() === undefined) {
-		diagnostics.warnings.push(
-			"Constellation Bindings are currently in beta to allow the API to evolve before general availability.\nPlease report any issues to https://github.com/cloudflare/workers-sdk/issues/new/choose\nNote: Run this command with the environment variable NO_CONSTELLATION_WARNING=true to hide this message\n\nFor example: `export NO_CONSTELLATION_WARNING=true && wrangler <YOUR COMMAND HERE>`"
-		);
-	}
-
-	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
-		"binding",
-		"project_id",
 	]);
 
 	return isValid;

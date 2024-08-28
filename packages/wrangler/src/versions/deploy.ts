@@ -8,11 +8,13 @@ import {
 	leftT,
 	spinnerWhile,
 } from "@cloudflare/cli/interactive";
+import { fetchResult } from "../cfetch";
 import { findWranglerToml, readConfig } from "../config";
 import { UserError } from "../errors";
 import { CI } from "../is-ci";
 import isInteractive from "../is-interactive";
 import * as metrics from "../metrics";
+import { writeOutput } from "../output";
 import { APIError } from "../parse";
 import { printWranglerBanner } from "../update-check";
 import { requireAuth } from "../user";
@@ -175,10 +177,10 @@ export async function versionsDeployHandler(args: VersionsDeployArgs) {
 
 	const start = Date.now();
 
-	await spinnerWhile({
+	const { id: deploymentId } = await spinnerWhile({
 		startMessage: `Deploying ${confirmedVersionsToDeploy.length} version(s)`,
-		async promise() {
-			await createDeployment(
+		promise() {
+			return createDeployment(
 				accountId,
 				workerName,
 				confirmedVersionTraffic,
@@ -203,6 +205,25 @@ export async function versionsDeployHandler(args: VersionsDeployArgs) {
 	cli.success(
 		`Deployed ${workerName} ${trafficSummaryString} (${elapsedString})`
 	);
+
+	let workerTag: string | null = null;
+	try {
+		const serviceMetaData = await fetchResult<{
+			default_environment: { script: { tag: string } };
+		}>(`/accounts/${accountId}/workers/services/${workerName}`);
+		workerTag = serviceMetaData.default_environment.script.tag;
+	} catch {
+		// If the fetch fails then we just output a null for the workerTag.
+	}
+	writeOutput({
+		type: "version-deploy",
+		version: 1,
+		worker_name: workerName,
+		worker_tag: workerTag,
+		// NOTE this deploymentId is related to the gradual rollout of the versions given in the version_traffic.
+		deployment_id: deploymentId,
+		version_traffic: confirmedVersionTraffic,
+	});
 }
 
 function getConfig(

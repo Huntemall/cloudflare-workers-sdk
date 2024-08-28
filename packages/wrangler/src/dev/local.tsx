@@ -7,6 +7,7 @@ import { logger } from "../logger";
 import { DEFAULT_WORKER_NAME, MiniflareServer } from "./miniflare";
 import type { ProxyData } from "../api";
 import type { Config } from "../config";
+import type { ExperimentalAssets } from "../config/environment";
 import type {
 	CfDurableObject,
 	CfScriptFormat,
@@ -17,7 +18,7 @@ import type {
 	WorkerRegistry,
 } from "../dev-registry";
 import type { EnablePagesAssetsServiceBindingOptions } from "../miniflare-cli/types";
-import type { AssetPaths } from "../sites";
+import type { LegacyAssetPaths } from "../sites";
 import type { ConfigBundle } from "./miniflare";
 import type { EsbuildBundle } from "./use-esbuild";
 
@@ -30,7 +31,8 @@ export interface LocalProps {
 	usageModel: "bundled" | "unbound" | undefined;
 	bindings: CfWorkerInit["bindings"];
 	workerDefinitions: WorkerRegistry | undefined;
-	assetPaths: AssetPaths | undefined;
+	legacyAssetPaths: LegacyAssetPaths | undefined;
+	experimentalAssets: ExperimentalAssets | undefined;
 	initialPort: number | undefined;
 	initialIp: string;
 	rules: Config["rules"];
@@ -89,7 +91,8 @@ export async function localPropsToConfigBundle(
 		inspectorPort: props.runtimeInspectorPort,
 		bindings: props.bindings,
 		workerDefinitions: props.workerDefinitions,
-		assetPaths: props.assetPaths,
+		legacyAssetPaths: props.legacyAssetPaths,
+		experimentalAssets: props.experimentalAssets,
 		initialPort: props.initialPort,
 		initialIp: props.initialIp,
 		rules: props.rules,

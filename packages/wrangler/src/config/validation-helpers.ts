@@ -232,11 +232,32 @@ export const isString: ValidatorFn = (diagnostics, field, value) => {
 };
 
 /**
+ * Validate that the field is a non-empty string.
+ */
+export const isNonEmptyString: ValidatorFn = (
+	diagnostics,
+	field,
+	value,
+	topLevelEnv
+) => {
+	if (!isString(diagnostics, field, value, topLevelEnv)) {
+		return false;
+	}
+
+	if ((value as string)?.trim() === "") {
+		diagnostics.errors.push(`Expected "${field}" to be a non-empty string.`);
+		return false;
+	}
+
+	return true;
+};
+
+/**
  * Validate that the `name` field is compliant with EWC constraints.
  */
 export const isValidName: ValidatorFn = (diagnostics, field, value) => {
 	if (
-		(typeof value === "string" && /^$|^[a-z0-9_ ][a-z0-9-_ ]*$/.test(value)) ||
+		(typeof value === "string" && /^$|^[a-z0-9_][a-z0-9-_]*$/.test(value)) ||
 		value === undefined
 	) {
 		return true;
@@ -596,7 +617,7 @@ const isRecord = (
 /**
  * JavaScript `typeof` operator return values.
  */
-type TypeofType =
+export type TypeofType =
 	| "string"
 	| "number"
 	| "bigint"

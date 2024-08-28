@@ -19,11 +19,12 @@ import {
 	createModuleCollector,
 	getWrangler1xLegacyModuleReferences,
 } from "../deployment-bundle/module-collection";
-import { validateNodeCompat } from "../deployment-bundle/node-compat";
+import { getNodeCompatMode } from "../deployment-bundle/node-compat";
 import { loadSourceMaps } from "../deployment-bundle/source-maps";
 import { confirm } from "../dialogs";
 import { getMigrationsToUpload } from "../durable";
 import { UserError } from "../errors";
+import { syncExperimentalAssets } from "../experimental-assets";
 import { logger } from "../logger";
 import { getMetricsUsageHeaders } from "../metrics";
 import { isNavigatorDefined } from "../navigator-user-agent";
@@ -35,7 +36,7 @@ import {
 	maybeRetrieveFileSourceMap,
 } from "../sourcemap";
 import type { Config } from "../config";
-import type { Rule } from "../config/environment";
+import type { ExperimentalAssets, Rule } from "../config/environment";
 import type { Entry } from "../deployment-bundle/entry";
 import type { CfPlacement, CfWorkerInit } from "../deployment-bundle/worker";
 import type { RetrieveSourceMapFunction } from "../sourcemap";
@@ -50,6 +51,7 @@ type Props = {
 	env: string | undefined;
 	compatibilityDate: string | undefined;
 	compatibilityFlags: string[] | undefined;
+	experimentalAssets: ExperimentalAssets | undefined;
 	vars: Record<string, string> | undefined;
 	defines: Record<string, string> | undefined;
 	alias: Record<string, string> | undefined;
@@ -107,33 +109,50 @@ function errIsStartupErr(err: unknown): err is ParseError & { code: 10021 } {
 	return false;
 }
 
-export default async function versionsUpload(props: Props): Promise<void> {
+export default async function versionsUpload(
+	props: Props
+): Promise<{ versionId: string | null; workerTag: string | null }> {
 	// TODO: warn if git/hg has uncommitted changes
 	const { config, accountId, name } = props;
+	let versionId: string | null = null;
+	let workerTag: string | null = null;
+
 	if (accountId && name) {
 		try {
-			const serviceMetaData = await fetchResult(
+			const {
+				default_environment: { script },
+			} = await fetchResult<{
+				default_environment: {
+					script: {
+						tag: string;
+						last_deployed_from: "dash" | "wrangler" | "api";
+					};
+				};
+			}>(
 				`/accounts/${accountId}/workers/services/${name}` // TODO(consider): should this be a /versions endpoint?
 			);
-			const { default_environment } = serviceMetaData as {
-				default_environment: {
-					script: { last_deployed_from: "dash" | "wrangler" | "api" };
-				};
-			};
 
-			if (default_environment.script.last_deployed_from === "dash") {
+			workerTag = script.tag;
+
+			if (script.last_deployed_from === "dash") {
 				logger.warn(
 					`You are about to upload a Worker Version that was last published via the Cloudflare Dashboard.\nEdits that have been made via the dashboard will be overridden by your local code and config.`
 				);
 				if (!(await confirm("Would you like to continue?"))) {
-					return;
+					return {
+						versionId,
+						workerTag,
+					};
 				}
-			} else if (default_environment.script.last_deployed_from === "api") {
+			} else if (script.last_deployed_from === "api") {
 				logger.warn(
 					`You are about to upload a Workers Version that was last updated via the API.\nEdits that have been made via the API will be overridden by your local code and config.`
 				);
 				if (!(await confirm("Would you like to continue?"))) {
-					return;
+					return {
+						versionId,
+						workerTag,
+					};
 				}
 			}
 		} catch (e) {
@@ -165,11 +184,13 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 
 	const minify = props.minify ?? config.minify;
 
-	const nodejsCompatMode = validateNodeCompat({
-		legacyNodeCompat: props.nodeCompat ?? config.node_compat ?? false,
-		compatibilityFlags: props.compatibilityFlags ?? config.compatibility_flags,
-		noBundle: props.noBundle ?? config.no_bundle ?? false,
-	});
+	const nodejsCompatMode = getNodeCompatMode(
+		props.compatibilityFlags ?? config.compatibility_flags,
+		{
+			nodeCompat: props.nodeCompat ?? config.node_compat,
+			noBundle: props.noBundle ?? config.no_bundle,
+		}
+	);
 
 	const compatibilityFlags =
 		props.compatibilityFlags ?? config.compatibility_flags;
@@ -274,7 +295,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 						bundle: true,
 						additionalModules: [],
 						moduleCollector,
-						serveAssetsFromWorker: false,
+						serveLegacyAssetsFromWorker: false,
 						doBindings: config.durable_objects.bindings,
 						jsxFactory,
 						jsxFragment,
@@ -285,7 +306,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 						define: { ...config.define, ...props.defines },
 						alias: { ...config.alias, ...props.alias },
 						checkFetch: false,
-						assets: config.assets,
+						legacyAssets: config.legacy_assets,
 						// enable the cache when publishing
 						bypassAssetCache: false,
 						// We want to know if the build is for development or publishing
@@ -327,6 +348,16 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 				})
 			: undefined;
 
+		// Upload assets if experimental assets is being used
+		const experimentalAssetsJwt: CfWorkerInit["experimental_assets_jwt"] =
+			props.experimentalAssets && !props.dryRun
+				? await syncExperimentalAssets(
+						accountId,
+						scriptName,
+						props.experimentalAssets.directory
+					)
+				: undefined;
+
 		const bindings: CfWorkerInit["bindings"] = {
 			kv_namespaces: config.kv_namespaces || [],
 			send_email: config.send_email,
@@ -344,13 +375,15 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 			r2_buckets: config.r2_buckets,
 			d1_databases: config.d1_databases,
 			vectorize: config.vectorize,
-			constellation: config.constellation,
 			hyperdrive: config.hyperdrive,
 			services: config.services,
 			analytics_engine_datasets: config.analytics_engine_datasets,
 			dispatch_namespaces: config.dispatch_namespaces,
 			mtls_certificates: config.mtls_certificates,
 			logfwdr: config.logfwdr,
+			experimental_assets: config.experimental_assets?.binding
+				? { binding: config.experimental_assets?.binding }
+				: undefined,
 			unsafe: {
 				bindings: config.unsafe.bindings,
 				metadata: config.unsafe.metadata,
@@ -390,6 +423,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 				"workers/message": props.message,
 				"workers/tag": props.tag,
 			},
+			experimental_assets_jwt: experimentalAssetsJwt,
 		};
 
 		await printBundleSize(
@@ -414,10 +448,11 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 			}
 		}
 
-		printBindings({ ...withoutStaticAssets, vars: maskedVars });
-
-		if (!props.dryRun) {
+		if (props.dryRun) {
+			printBindings({ ...withoutStaticAssets, vars: maskedVars });
+		} else {
 			await ensureQueuesExistByConfig(config);
+			let bindingsPrinted = false;
 
 			// Upload the script so it has time to propagate.
 			// We can also now tell whether available_on_subdomain is set
@@ -431,6 +466,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 					pipeline_hash: string | null;
 					mutable_pipeline_id: string | null;
 					deployment_id: string | null;
+					startup_time_ms: number;
 				}>(
 					workerUrl,
 					{
@@ -446,8 +482,16 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 					})
 				);
 
+				logger.log("Worker Startup Time:", result.startup_time_ms, "ms");
+				bindingsPrinted = true;
+				printBindings({ ...withoutStaticAssets, vars: maskedVars });
 				logger.log("Worker Version ID:", result.id);
+				versionId = result.id;
 			} catch (err) {
+				if (!bindingsPrinted) {
+					printBindings({ ...withoutStaticAssets, vars: maskedVars });
+				}
+
 				helpIfErrorIsSizeOrScriptStartup(err, dependencies);
 
 				// Apply source mapping to validation startup errors if possible
@@ -496,7 +540,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 
 	if (props.dryRun) {
 		logger.log(`--dry-run: exiting now.`);
-		return;
+		return { versionId, workerTag };
 	}
 	if (!accountId) {
 		throw new UserError("Missing accountId");
@@ -521,6 +565,8 @@ Changes to non-versioned settings (config properties 'logpush' or 'tail_consumer
 Changes to triggers (routes, custom domains, cron schedules, etc) must be applied with the command ${cmdTriggersDeploy}
 `)
 	);
+
+	return { versionId, workerTag };
 }
 
 export function helpIfErrorIsSizeOrScriptStartup(

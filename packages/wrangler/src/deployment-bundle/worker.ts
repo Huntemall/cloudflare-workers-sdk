@@ -179,11 +179,6 @@ export interface CfVectorize {
 	index_name: string;
 }
 
-export interface CfConstellation {
-	binding: string;
-	project_id: string;
-}
-
 export interface CfHyperdrive {
 	binding: string;
 	id: string;
@@ -224,6 +219,10 @@ export interface CfLogfwdr {
 export interface CfLogfwdrBinding {
 	name: string;
 	destination: string;
+}
+
+export interface CfExperimentalAssetBinding {
+	binding: string;
 }
 
 export interface CfUnsafeBinding {
@@ -315,7 +314,6 @@ export interface CfWorkerInit {
 		r2_buckets: CfR2Bucket[] | undefined;
 		d1_databases: CfD1Database[] | undefined;
 		vectorize: CfVectorize[] | undefined;
-		constellation: CfConstellation[] | undefined;
 		hyperdrive: CfHyperdrive[] | undefined;
 		services: CfService[] | undefined;
 		analytics_engine_datasets: CfAnalyticsEngineDataset[] | undefined;
@@ -323,6 +321,7 @@ export interface CfWorkerInit {
 		mtls_certificates: CfMTlsCertificate[] | undefined;
 		logfwdr: CfLogfwdr | undefined;
 		unsafe: CfUnsafe | undefined;
+		experimental_assets: CfExperimentalAssetBinding | undefined;
 	};
 	/**
 	 * The raw bindings - this is basically never provided and it'll be the bindings above
@@ -342,6 +341,7 @@ export interface CfWorkerInit {
 	tail_consumers: CfTailConsumer[] | undefined;
 	limits: CfUserLimits | undefined;
 	annotations?: Record<string, string | undefined>;
+	experimental_assets_jwt: string | undefined;
 }
 
 export interface CfWorkerContext {

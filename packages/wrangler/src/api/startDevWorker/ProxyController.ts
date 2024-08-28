@@ -115,7 +115,10 @@ export class ProxyController extends Controller<ProxyControllerEventMap> {
 				{
 					name: "InspectorProxyWorker",
 					compatibilityDate: "2023-12-18",
-					compatibilityFlags: ["nodejs_compat"],
+					compatibilityFlags: [
+						"nodejs_compat",
+						"increase_websocket_message_size",
+					],
 					modulesRoot: path.dirname(inspectorProxyWorkerPath),
 					modules: [{ type: "ESModule", path: inspectorProxyWorkerPath }],
 					durableObjects: {
@@ -158,6 +161,7 @@ export class ProxyController extends Controller<ProxyControllerEventMap> {
 					logger.loggerLevel === "debug" ? "wrangler-ProxyWorker" : "wrangler",
 			}),
 			handleRuntimeStdio,
+			liveReload: false,
 		};
 
 		const proxyWorkerOptionsChanged = didMiniflareOptionsChange(
@@ -282,14 +286,14 @@ export class ProxyController extends Controller<ProxyControllerEventMap> {
 
 		try {
 			await this.runtimeMessageMutex.runWith(async () => {
-				assert(this.proxyWorker, "proxyWorker should already be instantiated");
+				const { proxyWorker } = await this.ready.promise;
 
-				const ready = await this.proxyWorker.ready.catch(() => undefined);
+				const ready = await proxyWorker.ready.catch(() => undefined);
 				if (!ready) {
 					return;
 				}
 
-				return this.proxyWorker.dispatchFetch(
+				return proxyWorker.dispatchFetch(
 					`http://dummy/cdn-cgi/ProxyWorker/${message.type}`,
 					{
 						headers: { Authorization: this.secret },

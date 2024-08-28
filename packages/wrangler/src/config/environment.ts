@@ -32,8 +32,11 @@ export type Route =
  * Configuration in wrangler for Cloudchamber
  */
 export type CloudchamberConfig = {
+	image?: string;
+	location?: string;
 	vcpu?: number;
 	memory?: string;
+	ipv4?: boolean;
 };
 
 /**
@@ -332,6 +335,13 @@ interface EnvironmentInheritable {
 	 * @inheritable
 	 */
 	placement: { mode: "off" | "smart" } | undefined;
+
+	/**
+	 * Specify the directory of static assets to deploy/serve
+	 *
+	 * @inheritable
+	 */
+	experimental_assets: ExperimentalAssets | undefined;
 }
 
 export type DurableObjectBindings = {
@@ -554,23 +564,6 @@ export interface EnvironmentNonInheritable {
 		binding: string;
 		/** The name of the index. */
 		index_name: string;
-	}[];
-
-	// Q: is this still relevant? what abt the `ai` key? is there a diff between them?
-	/**
-	 * Specifies Constellation projects that are bound to this Worker environment.
-	 *
-	 * NOTE: This field is not automatically inherited from the top level environment,
-	 * and so must be specified in every named environment.
-	 *
-	 * @default `[]`
-	 * @nonInheritable
-	 */
-	constellation: {
-		/** The binding name used to refer to the project in the Worker. */
-		binding: string;
-		/** The id of the project. */
-		project_id: string;
 	}[];
 
 	/**
@@ -879,3 +872,9 @@ export interface UserLimits {
 	/** Maximum allowed CPU time for a Worker's invocation in milliseconds */
 	cpu_ms: number;
 }
+
+export type ExperimentalAssets = {
+	/** Absolute path to assets directory */
+	directory: string;
+	binding?: string;
+};

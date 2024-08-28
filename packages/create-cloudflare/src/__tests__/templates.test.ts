@@ -1,4 +1,7 @@
 import { existsSync, statSync } from "fs";
+import { crash } from "@cloudflare/cli";
+import { spinner } from "@cloudflare/cli/interactive";
+import degit from "degit";
 import { mockSpinner } from "helpers/__tests__/mocks";
 import {
 	appendFile,
@@ -7,12 +10,18 @@ import {
 	writeFile,
 } from "helpers/files";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { addWranglerToGitIgnore } from "../templates";
+import {
+	addWranglerToGitIgnore,
+	deriveCorrelatedArgs,
+	downloadRemoteTemplate,
+} from "../templates";
 import type { PathLike } from "fs";
-import type { C3Context } from "types";
+import type { C3Args, C3Context } from "types";
 
+vi.mock("degit");
 vi.mock("fs");
 vi.mock("helpers/files");
+vi.mock("@cloudflare/cli");
 vi.mock("@cloudflare/cli/interactive");
 
 beforeEach(() => {
@@ -245,4 +254,74 @@ describe("addWranglerToGitIgnore", () => {
 			filePath === path ? content.replace(/\n\s*/g, "\n") : "",
 		);
 	}
+});
+
+describe("downloadRemoteTemplate", () => {
+	function mockDegit() {
+		// @ts-expect-error only clone will be used
+		return vi.mocked(degit).mockReturnValue({
+			clone: () => Promise.resolve(),
+		});
+	}
+
+	test("should download template using degit", async () => {
+		const mock = mockDegit();
+
+		await downloadRemoteTemplate("cloudflare/workers-sdk");
+
+		expect(mock).toBeCalled();
+	});
+
+	test("should not use a spinner", async () => {
+		// Degit runs `git clone` internally which might prompt for credentials
+		// A spinner will suppress the prompt and keep the CLI waiting in the cloning stage
+		mockDegit();
+
+		await downloadRemoteTemplate("cloudflare/workers-sdk");
+
+		expect(spinner).not.toBeCalled();
+	});
+});
+
+describe("deriveCorrelatedArgs", () => {
+	test("should derive the lang as TypeScript if `--ts` is specified", () => {
+		const args: Partial<C3Args> = {
+			ts: true,
+		};
+
+		deriveCorrelatedArgs(args);
+
+		expect(args.lang).toBe("ts");
+	});
+
+	test("should derive the lang as JavaScript if `--ts=false` is specified", () => {
+		const args: Partial<C3Args> = {
+			ts: false,
+		};
+
+		deriveCorrelatedArgs(args);
+
+		expect(args.lang).toBe("js");
+	});
+
+	test("should crash if both the lang and ts arguments are specified", () => {
+		let args: Partial<C3Args> = {
+			lang: "ts",
+		};
+
+		deriveCorrelatedArgs(args);
+
+		expect(args.lang).toBe("ts");
+		expect(crash).not.toBeCalled();
+
+		args = {
+			ts: true,
+			lang: "ts",
+		};
+		deriveCorrelatedArgs(args);
+
+		expect(crash).toBeCalledWith(
+			"The `--ts` argument cannot be specified in conjunction with the `--lang` argument",
+		);
+	});
 });

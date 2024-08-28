@@ -182,12 +182,6 @@ export function convertCfWorkerInitBindingstoBindings(
 				}
 				break;
 			}
-			case "constellation": {
-				for (const { binding, ...x } of info) {
-					output[binding] = { type: "constellation", ...x };
-				}
-				break;
-			}
 			case "services": {
 				for (const { binding, ...x } of info) {
 					output[binding] = { type: "service", ...x };
@@ -241,9 +235,13 @@ export function convertCfWorkerInitBindingstoBindings(
 				break;
 			}
 			case "unsafe": {
-				for (const { type: unsafeType, name } of info.bindings ?? []) {
-					output[name] = { type: `unsafe_${unsafeType}` };
+				for (const { type: unsafeType, name, ...data } of info.bindings ?? []) {
+					output[name] = { type: `unsafe_${unsafeType}`, ...data };
 				}
+				break;
+			}
+			case "experimental_assets": {
+				output[info["binding"]] = { type: "assets" };
 				break;
 			}
 			default: {
@@ -276,7 +274,6 @@ export async function convertBindingsToCfWorkerInitBindings(
 		r2_buckets: undefined,
 		d1_databases: undefined,
 		vectorize: undefined,
-		constellation: undefined,
 		hyperdrive: undefined,
 		services: undefined,
 		analytics_engine_datasets: undefined,
@@ -284,6 +281,7 @@ export async function convertBindingsToCfWorkerInitBindings(
 		mtls_certificates: undefined,
 		logfwdr: undefined,
 		unsafe: undefined,
+		experimental_assets: undefined,
 	};
 
 	const fetchers: Record<string, ServiceFetch> = {};
@@ -339,9 +337,6 @@ export async function convertBindingsToCfWorkerInitBindings(
 		} else if (binding.type === "vectorize") {
 			bindings.vectorize ??= [];
 			bindings.vectorize.push({ ...binding, binding: name });
-		} else if (binding.type === "constellation") {
-			bindings.constellation ??= [];
-			bindings.constellation.push({ ...binding, binding: name });
 		} else if (binding.type === "hyperdrive") {
 			bindings.hyperdrive ??= [];
 			bindings.hyperdrive.push({ ...binding, binding: name });
@@ -368,9 +363,12 @@ export async function convertBindingsToCfWorkerInitBindings(
 				metadata: undefined,
 				capnp: undefined,
 			};
+
+			const { type, ...data } = binding;
 			bindings.unsafe.bindings?.push({
-				type: binding.type.slice("unsafe_".length),
+				type: type.slice("unsafe_".length),
 				name: name,
+				...data,
 			});
 		}
 	}

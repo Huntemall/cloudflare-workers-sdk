@@ -1,5 +1,90 @@
 # miniflare
 
+## 3.20240821.0
+
+### Patch Changes
+
+- [#6555](https://github.com/cloudflare/workers-sdk/pull/6555) [`b0e2f0b`](https://github.com/cloudflare/workers-sdk/commit/b0e2f0bfc67bee9c43a64ca12447e778758c27cd) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "miniflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency                | From          | To            |
+  | ------------------------- | ------------- | ------------- |
+  | workerd                   | 1.20240806.0  | 1.20240821.1  |
+  | @cloudflare/workers-types | ^4.20240806.0 | ^4.20240821.1 |
+
+## 3.20240806.1
+
+### Minor Changes
+
+- [#6403](https://github.com/cloudflare/workers-sdk/pull/6403) [`00f340f`](https://github.com/cloudflare/workers-sdk/commit/00f340f7c1709db777e80a8ea24d245909ff4486) Thanks [@CarmenPopoviciu](https://github.com/CarmenPopoviciu)! - feat: Extend KV plugin behaviour to support Workers assets
+
+  This commit extends Miniflare's KV plugin's behaviour to support Workers assets, and therefore enables the emulation of Workers with assets in local development.
+
+## 3.20240806.0
+
+### Patch Changes
+
+- [#6438](https://github.com/cloudflare/workers-sdk/pull/6438) [`d55eeca`](https://github.com/cloudflare/workers-sdk/commit/d55eeca878b68bd10ddcc5ef3b1b4d820b037684) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "miniflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency                | From          | To            |
+  | ------------------------- | ------------- | ------------- |
+  | workerd                   | 1.20240725.0  | 1.20240806.0  |
+  | @cloudflare/workers-types | ^4.20240725.0 | ^4.20240806.0 |
+
+## 3.20240725.0
+
+### Patch Changes
+
+- [#6345](https://github.com/cloudflare/workers-sdk/pull/6345) [`a9021aa`](https://github.com/cloudflare/workers-sdk/commit/a9021aa520541e6a83e572d01e57e232cbc163e0) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "miniflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency                | From          | To            |
+  | ------------------------- | ------------- | ------------- |
+  | workerd                   | 1.20240718.0  | 1.20240725.0  |
+  | @cloudflare/workers-types | ^4.20240718.0 | ^4.20240725.0 |
+
+- [#6301](https://github.com/cloudflare/workers-sdk/pull/6301) [`44ad2c7`](https://github.com/cloudflare/workers-sdk/commit/44ad2c777bd254dbb62cf7f8b1c2f8351c74fb75) Thanks [@dario-piotrowicz](https://github.com/dario-piotrowicz)! - fix: Allow the magic proxy to proxy objects containing functions indexed by symbols
+
+  In https://github.com/cloudflare/workers-sdk/pull/5670 we introduced the possibility
+  of the magic proxy to handle object containing functions, the implementation didn't
+  account for functions being indexed by symbols, address such issue
+
+## 3.20240718.1
+
+### Patch Changes
+
+- [#6342](https://github.com/cloudflare/workers-sdk/pull/6342) [`b3c3cb8`](https://github.com/cloudflare/workers-sdk/commit/b3c3cb89787b8f669485c1c54f9d73ea9ec53605) Thanks [@petebacondarwin](https://github.com/petebacondarwin)! - fix Miniflare (workerd) network settings to allow 240.0.0.0 range
+
+## 3.20240718.0
+
+### Patch Changes
+
+- [#6294](https://github.com/cloudflare/workers-sdk/pull/6294) [`779c713`](https://github.com/cloudflare/workers-sdk/commit/779c71349ea1c747ff4486e4084024a7e88a05cb) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "miniflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency                | From          | To            |
+  | ------------------------- | ------------- | ------------- |
+  | workerd                   | 1.20240712.0  | 1.20240718.0  |
+  | @cloudflare/workers-types | ^4.20240712.0 | ^4.20240718.0 |
+
+## 3.20240712.0
+
+### Patch Changes
+
+- [#6265](https://github.com/cloudflare/workers-sdk/pull/6265) [`0d32448`](https://github.com/cloudflare/workers-sdk/commit/0d32448fc72521be691dfc87c8ad5f108ddced62) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "miniflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency                | From          | To            |
+  | ------------------------- | ------------- | ------------- |
+  | workerd                   | 1.20240701.0  | 1.20240712.0  |
+  | @cloudflare/workers-types | ^4.20240620.0 | ^4.20240712.0 |
+
 ## 3.20240701.0
 
 ### Minor Changes

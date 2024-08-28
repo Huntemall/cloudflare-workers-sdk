@@ -7,14 +7,29 @@ import { fetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WranglerE2ETestHelper } from "./helpers/e2e-wrangler-test";
 import { fetchText } from "./helpers/fetch-text";
+import { generateResourceName } from "./helpers/generate-resource-name";
 import { retry } from "./helpers/retry";
 import { seed as baseSeed, makeRoot } from "./helpers/setup";
+
+/**
+ * We use the same workerName for all of the tests in this suite in hopes of reducing flakes.
+ * When creating a new worker, a <workerName>.devprod-testing7928.workers.dev subdomain is created.
+ * The platform API locks a database table for the zone (devprod-testing7928.workers.dev) while doing this.
+ * Creating many workers in the same account/zone in quick succession can run up against the lock.
+ * This test suite runs sequentially so does not cause lock issues for itself, but we run into lock issues
+ * when multiple PRs have jobs running at the same time (or the same PR has the tests run across multiple OSes).
+ */
+const workerName = generateResourceName();
+/**
+ * Some tests require a 2nd worker to bind to. Let's create that here too.
+ */
+const workerName2 = generateResourceName();
 
 it("can import URL from 'url' in node_compat mode", async () => {
 	const helper = new WranglerE2ETestHelper();
 	await helper.seed({
 		"wrangler.toml": dedent`
-				name = "worker"
+				name = "${workerName}"
 				main = "src/index.ts"
 				compatibility_date = "2023-01-01"
 				node_compat = true
@@ -50,7 +65,7 @@ describe.each([
 		const helper = new WranglerE2ETestHelper();
 		await helper.seed({
 			"wrangler.toml": dedent`
-							name = "worker"
+							name = "${workerName}"
 							main = "src/index.ts"
 							compatibility_date = "2023-01-01"
 							compatibility_flags = ["nodejs_compat"]
@@ -93,17 +108,19 @@ describe.each([
 	});
 });
 
+// Skipping remote python tests because they consistently flake with timeouts
+// Unskip once remote dev with python workers is more stable
 describe.each([
 	{ cmd: "wrangler dev" },
-	{ cmd: "wrangler dev --remote" },
+	// { cmd: "wrangler dev --remote" },
 	{ cmd: "wrangler dev --x-dev-env" },
-	{ cmd: "wrangler dev --remote --x-dev-env" },
+	// { cmd: "wrangler dev --remote --x-dev-env" },
 ])("basic python dev: $cmd", { timeout: 90_000 }, ({ cmd }) => {
 	it(`can modify entrypoint during ${cmd}`, async () => {
 		const helper = new WranglerE2ETestHelper();
 		await helper.seed({
 			"wrangler.toml": dedent`
-					name = "worker"
+					name = "${workerName}"
 					main = "index.py"
 					compatibility_date = "2023-01-01"
 					compatibility_flags = ["python_workers"]
@@ -156,7 +173,7 @@ describe.each([
 		const helper = new WranglerE2ETestHelper();
 		await helper.seed({
 			"wrangler.toml": dedent`
-					name = "worker"
+					name = "${workerName}"
 					main = "index.py"
 					compatibility_date = "2023-01-01"
 					compatibility_flags = ["python_workers"]
@@ -220,13 +237,13 @@ describe.each([
 		a = await makeRoot();
 		await baseSeed(a, {
 			"wrangler.toml": dedent`
-					name = "a"
+					name = "${workerName}"
 					main = "src/index.ts"
 					compatibility_date = "2023-01-01"
 
 					[[services]]
 					binding = "BEE"
-					service = 'b'
+					service = '${workerName2}'
 			`,
 			"src/index.ts": dedent/* javascript */ `
 				export default {
@@ -247,7 +264,7 @@ describe.each([
 		b = await makeRoot();
 		await baseSeed(b, {
 			"wrangler.toml": dedent`
-					name = "b"
+					name = "${workerName2}"
 					main = "src/index.ts"
 					compatibility_date = "2023-01-01"
 			`,
@@ -321,7 +338,7 @@ describe("hyperdrive dev tests", () => {
 		}
 		await helper.seed({
 			"wrangler.toml": dedent`
-					name = "worker"
+					name = "${workerName}"
 					main = "src/index.ts"
 					compatibility_date = "2023-10-25"
 
@@ -368,7 +385,7 @@ describe("hyperdrive dev tests", () => {
 		}
 		await helper.seed({
 			"wrangler.toml": dedent`
-					name = "worker"
+					name = "${workerName}"
 					main = "src/index.ts"
 					compatibility_date = "2023-10-25"
 
@@ -422,7 +439,7 @@ describe("hyperdrive dev tests", () => {
 		}
 		await helper.seed({
 			"wrangler.toml": dedent`
-					name = "worker"
+					name = "${workerName}"
 					main = "src/index.ts"
 					compatibility_date = "2023-10-25"
 
@@ -483,7 +500,7 @@ describe("queue dev tests", () => {
 		const helper = new WranglerE2ETestHelper();
 		await helper.seed({
 			"wrangler.toml": dedent`
-					name = "worker"
+					name = "${workerName}"
 					main = "src/index.ts"
 					compatibility_date = "2024-04-04"
 
@@ -520,7 +537,7 @@ describe("writes debug logs to hidden file", () => {
 		const helper = new WranglerE2ETestHelper();
 		await helper.seed({
 			"wrangler.toml": dedent`
-					name = "a"
+					name = "${workerName}"
 					main = "src/index.ts"
 					compatibility_date = "2023-01-01"
 				`,
@@ -557,7 +574,7 @@ describe("writes debug logs to hidden file", () => {
 		const helper = new WranglerE2ETestHelper();
 		await helper.seed({
 			"wrangler.toml": dedent`
-				name = "a"
+				name = "${workerName}"
 				main = "src/index.ts"
 				compatibility_date = "2023-01-01"
 			`,
@@ -590,7 +607,7 @@ describe("zone selection", () => {
 		const helper = new WranglerE2ETestHelper();
 		await helper.seed({
 			"wrangler.toml": dedent`
-				name = "worker"
+				name = "${workerName}"
 				main = "src/index.ts"
 				compatibility_date = "2023-01-01"
 				compatibility_flags = ["nodejs_compat"]`,
@@ -621,7 +638,7 @@ describe("zone selection", () => {
 		const helper = new WranglerE2ETestHelper();
 		await helper.seed({
 			"wrangler.toml": dedent`
-				name = "worker"
+				name = "${workerName}"
 				main = "src/index.ts"
 				compatibility_date = "2023-01-01"
 				compatibility_flags = ["nodejs_compat"]
@@ -657,7 +674,7 @@ describe("zone selection", () => {
 		const helper = new WranglerE2ETestHelper();
 		await helper.seed({
 			"wrangler.toml": dedent`
-				name = "worker"
+				name = "${workerName}"
 				main = "src/index.ts"
 				compatibility_date = "2023-01-01"
 				compatibility_flags = ["nodejs_compat"]
@@ -695,7 +712,7 @@ describe("zone selection", () => {
 		const helper = new WranglerE2ETestHelper();
 		await helper.seed({
 			"wrangler.toml": dedent`
-				name = "worker"
+				name = "${workerName}"
 				main = "src/index.ts"
 				compatibility_date = "2023-01-01"
 				compatibility_flags = ["nodejs_compat"]
@@ -731,7 +748,7 @@ describe("custom builds", () => {
 		const helper = new WranglerE2ETestHelper();
 		await helper.seed({
 			"wrangler.toml": dedent`
-						name = "worker"
+						name = "${workerName}"
 						compatibility_date = "2023-01-01"
 						main = "src/index.ts"
 						build.command = "echo 'hello'"

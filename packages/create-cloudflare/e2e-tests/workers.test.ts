@@ -22,19 +22,13 @@ const TEST_TIMEOUT = 1000 * 60 * 5;
 type WorkerTestConfig = RunnerConfig & {
 	name?: string;
 	template: string;
+	variants: string[];
 };
 
 const workerTemplates: WorkerTestConfig[] = [
 	{
 		template: "hello-world",
-		verifyDeploy: {
-			route: "/",
-			expectedText: "Hello World!",
-		},
-	},
-	{
-		template: "hello-world-python",
-		promptHandlers: [],
+		variants: ["TypeScript", "JavaScript", "Python"],
 		verifyDeploy: {
 			route: "/",
 			expectedText: "Hello World!",
@@ -42,6 +36,7 @@ const workerTemplates: WorkerTestConfig[] = [
 	},
 	{
 		template: "common",
+		variants: ["TypeScript", "JavaScript"],
 		verifyDeploy: {
 			route: "/",
 			expectedText: "Try making requests to:",
@@ -49,15 +44,17 @@ const workerTemplates: WorkerTestConfig[] = [
 	},
 	{
 		template: "queues",
+		variants: ["TypeScript", "JavaScript"],
 		// Skipped for now, since C3 does not yet support resource creation
 	},
 	{
 		template: "scheduled",
+		variants: ["TypeScript", "JavaScript"],
 		// Skipped for now, since it's not possible to test scheduled events on deployed Workers
 	},
 	{
 		template: "openapi",
-		promptHandlers: [],
+		variants: [],
 		verifyDeploy: {
 			route: "/",
 			expectedText: "SwaggerUI",
@@ -80,31 +77,23 @@ describe
 
 		workerTemplates
 			.flatMap<WorkerTestConfig>((template) =>
-				template.promptHandlers
-					? [template]
-					: [
-							{
+				template.variants.length > 0
+					? template.variants.map((variant) => {
+							return {
 								...template,
-								name: `${template.name ?? template.template}-ts`,
+								name: `${template.name ?? template.template}-${variant.toLowerCase()}`,
 								promptHandlers: [
 									{
-										matcher: /Do you want to use TypeScript\?/,
-										input: ["y"],
+										matcher: /Which language do you want to use\?/,
+										input: {
+											type: "select",
+											target: variant,
+										},
 									},
 								],
-							},
-
-							{
-								...template,
-								name: `${template.name ?? template.template}-js`,
-								promptHandlers: [
-									{
-										matcher: /Do you want to use TypeScript\?/,
-										input: ["n"],
-									},
-								],
-							},
-						],
+							};
+						})
+					: [template],
 			)
 			.forEach((template) => {
 				const name = template.name ?? template.template;
@@ -178,7 +167,7 @@ const runCli = async (
 
 	// Verify deployment
 	const deployedUrlRe =
-		/deployment is ready at: (https:\/\/.+\.(workers)\.dev)/;
+		/deployment is ready at: (https:\/\/.+?\.(workers)\.dev)/;
 
 	const match = output.replaceAll("\n", "").match(deployedUrlRe);
 	if (!match || !match[1]) {

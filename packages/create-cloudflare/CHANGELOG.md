@@ -1,5 +1,215 @@
 # create-cloudflare
 
+## 2.25.2
+
+### Patch Changes
+
+- [#6557](https://github.com/cloudflare/workers-sdk/pull/6557) [`2e9aa53`](https://github.com/cloudflare/workers-sdk/commit/2e9aa53751c575128dc513dabc3878426a6f4c5a) Thanks [@edmundhung](https://github.com/edmundhung)! - fix: renamed the "Demo Application" category to "Application Starter"
+
+## 2.25.1
+
+### Patch Changes
+
+- [#6496](https://github.com/cloudflare/workers-sdk/pull/6496) [`3f229ce`](https://github.com/cloudflare/workers-sdk/commit/3f229ceb45e16d4d2b7ba611c12d0e8b4b7c9984) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency      | From   | To     |
+  | --------------- | ------ | ------ |
+  | @angular/create | 18.1.3 | 18.1.4 |
+
+- [#6501](https://github.com/cloudflare/workers-sdk/pull/6501) [`87c8f2d`](https://github.com/cloudflare/workers-sdk/commit/87c8f2dc702035106622628c5585c6c9d8166f67) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency        | From  | To    |
+  | ----------------- | ----- | ----- |
+  | create-docusaurus | 3.5.1 | 3.5.2 |
+
+- [#6523](https://github.com/cloudflare/workers-sdk/pull/6523) [`0c4d10a`](https://github.com/cloudflare/workers-sdk/commit/0c4d10a5f1b63c6b6a565e2f87a44b40fea503e0) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency    | From  | To    |
+  | ------------- | ----- | ----- |
+  | create-svelte | 6.3.5 | 6.3.8 |
+
+## 2.25.0
+
+### Minor Changes
+
+- [#6428](https://github.com/cloudflare/workers-sdk/pull/6428) [`37dc86f`](https://github.com/cloudflare/workers-sdk/commit/37dc86ff436aacadd7c0bab6a76293408f4c417f) Thanks [@edmundhung](https://github.com/edmundhung)! - feat: allow users to change prompt answer
+
+  It is now possible to change the answer for category and type while the project has not been created locally.
+
+### Patch Changes
+
+- [#6475](https://github.com/cloudflare/workers-sdk/pull/6475) [`dfe8c0d`](https://github.com/cloudflare/workers-sdk/commit/dfe8c0d5134407ac6a6539eefcb17fba0ec2c6ce) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency  | From   | To     |
+  | ----------- | ------ | ------ |
+  | create-hono | 0.10.1 | 0.12.0 |
+
+- [#6476](https://github.com/cloudflare/workers-sdk/pull/6476) [`1d4a36f`](https://github.com/cloudflare/workers-sdk/commit/1d4a36f179cadf14a00458a1d5c4e489bbf1b75b) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency        | From  | To    |
+  | ----------------- | ----- | ----- |
+  | create-docusaurus | 3.4.0 | 3.5.1 |
+
+- [#6495](https://github.com/cloudflare/workers-sdk/pull/6495) [`3516faa`](https://github.com/cloudflare/workers-sdk/commit/3516faaed25ed60903272af18d7c5d4c8da8c208) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency   | From   | To     |
+  | ------------ | ------ | ------ |
+  | create-remix | 2.10.3 | 2.11.1 |
+
+- [#6481](https://github.com/cloudflare/workers-sdk/pull/6481) [`83083d7`](https://github.com/cloudflare/workers-sdk/commit/83083d7f3e672bc0726d0c65d72a4a1b032eb516) Thanks [@roottool](https://github.com/roottool)! - fix: Update `hono` template to remove binding type snippet.
+
+## 2.24.0
+
+### Minor Changes
+
+- [#6418](https://github.com/cloudflare/workers-sdk/pull/6418) [`5d771c2`](https://github.com/cloudflare/workers-sdk/commit/5d771c287e6edd077d7be8edabdf17629163b4e6) Thanks [@edmundhung](https://github.com/edmundhung)! - feat: guiding user template selection with description for each options
+
+- [#6412](https://github.com/cloudflare/workers-sdk/pull/6412) [`71882ee`](https://github.com/cloudflare/workers-sdk/commit/71882ee9a58eccb8332dd34c0f7dd96ec55bdcdd) Thanks [@edmundhung](https://github.com/edmundhung)! - feat: update welcome and summary message
+
+### Patch Changes
+
+- [#6395](https://github.com/cloudflare/workers-sdk/pull/6395) [`3aa7463`](https://github.com/cloudflare/workers-sdk/commit/3aa7463dffe62651dce3a7dca261d4ebe6fb5a39) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency      | From   | To     |
+  | --------------- | ------ | ------ |
+  | @angular/create | 18.1.2 | 18.1.3 |
+
+- [#6396](https://github.com/cloudflare/workers-sdk/pull/6396) [`7dcaa3e`](https://github.com/cloudflare/workers-sdk/commit/7dcaa3e834a58b9baff649229b6db3c401c7a8e9) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency    | From  | To    |
+  | ------------- | ----- | ----- |
+  | create-svelte | 6.3.4 | 6.3.5 |
+
+## 2.23.0
+
+### Minor Changes
+
+- [#6320](https://github.com/cloudflare/workers-sdk/pull/6320) [`5aa4753`](https://github.com/cloudflare/workers-sdk/commit/5aa4753a12dde28e91e85a2f9e4eae17ead62fb0) Thanks [@edmundhung](https://github.com/edmundhung)! - feat: update submenu userflow
+
+  Now, we will first prompt for the kind of templates that should be created and show a different set of templates depending on the category. If the template selected supports different languages, we will also ask for the language user preferred.
+
+  Two new arguments are also added to support the new structure: `--category` and `--lang`. For more details, please refer to our [docs](https://developers.cloudflare.com/pages/get-started/c3#cli-arguments).
+
+### Patch Changes
+
+- [#6307](https://github.com/cloudflare/workers-sdk/pull/6307) [`4998c54`](https://github.com/cloudflare/workers-sdk/commit/4998c54371109e87feaa8cd1800ea2cb3f49fdd4) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency      | From   | To     |
+  | --------------- | ------ | ------ |
+  | create-next-app | 14.1.0 | 14.2.5 |
+
+- [#6334](https://github.com/cloudflare/workers-sdk/pull/6334) [`6968d91`](https://github.com/cloudflare/workers-sdk/commit/6968d91065d0de2e2a3f542f17223aaacf90c687) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency    | From  | To    |
+  | ------------- | ----- | ----- |
+  | create-svelte | 6.3.3 | 6.3.4 |
+
+- [#6335](https://github.com/cloudflare/workers-sdk/pull/6335) [`5e4fd26`](https://github.com/cloudflare/workers-sdk/commit/5e4fd26fe5da1ff768d95d438d10e046e9a9de33) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency      | From   | To     |
+  | --------------- | ------ | ------ |
+  | @angular/create | 18.1.1 | 18.1.2 |
+
+- [#6373](https://github.com/cloudflare/workers-sdk/pull/6373) [`0ffe17d`](https://github.com/cloudflare/workers-sdk/commit/0ffe17d0f734cb2e43528f3d2ac491670d6173fe) Thanks [@dario-piotrowicz](https://github.com/dario-piotrowicz)! - fix: make sure to always warn developers trying to use git when their git instance is not properly configured
+
+## 2.22.3
+
+### Patch Changes
+
+- [#6333](https://github.com/cloudflare/workers-sdk/pull/6333) [`affdc56`](https://github.com/cloudflare/workers-sdk/commit/affdc56d77b86357fc474c6b729bcaa8edd8237d) Thanks [@penalosa](https://github.com/penalosa)! - fix: Prevent `@types/node` from being erroneously included in the Hello World Worker typing environment.
+
+## 2.22.2
+
+### Patch Changes
+
+- [#6308](https://github.com/cloudflare/workers-sdk/pull/6308) [`d947d72`](https://github.com/cloudflare/workers-sdk/commit/d947d72ea518358bb11df94ede76c9aef7646ea4) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency | From   | To     |
+  | ---------- | ------ | ------ |
+  | gatsby     | 5.13.6 | 5.13.7 |
+
+- [#6309](https://github.com/cloudflare/workers-sdk/pull/6309) [`a04796d`](https://github.com/cloudflare/workers-sdk/commit/a04796db7f618999c04c9a7b5ddc30d310ea3644) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency   | From   | To     |
+  | ------------ | ------ | ------ |
+  | create-solid | 0.5.11 | 0.5.12 |
+
+- [#6316](https://github.com/cloudflare/workers-sdk/pull/6316) [`7e421fb`](https://github.com/cloudflare/workers-sdk/commit/7e421fb75ddd4f21786c479da1beaf85ba3cdb56) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency  | From   | To     |
+  | ----------- | ------ | ------ |
+  | create-hono | 0.10.0 | 0.10.1 |
+
+- [#6306](https://github.com/cloudflare/workers-sdk/pull/6306) [`819eed9`](https://github.com/cloudflare/workers-sdk/commit/819eed9cc577517c8289f49916929996a069a85b) Thanks [@edmundhung](https://github.com/edmundhung)! - fix: creating an application from a non-existent or private repository will now be prompted for the username/password if required
+
+- [#6310](https://github.com/cloudflare/workers-sdk/pull/6310) [`20c0bf1`](https://github.com/cloudflare/workers-sdk/commit/20c0bf1cae81fdcc188aee4e87130bfdb8151543) Thanks [@edmundhung](https://github.com/edmundhung)! - fix: support GitHub URL with subdirectory
+
+  You can now copy+paste the URL directly from your address bar when you find a template within a (mono)repo on github.com.
+
+## 2.22.1
+
+### Patch Changes
+
+- [#6283](https://github.com/cloudflare/workers-sdk/pull/6283) [`30a1e9c`](https://github.com/cloudflare/workers-sdk/commit/30a1e9cac2c7204c6172208105ba4a4452333a8f) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency   | From  | To     |
+  | ------------ | ----- | ------ |
+  | create-remix | 2.9.2 | 2.10.3 |
+
+- [#6284](https://github.com/cloudflare/workers-sdk/pull/6284) [`f1596d7`](https://github.com/cloudflare/workers-sdk/commit/f1596d7d7e720a3f37116894de30f99d1128542d) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency      | From   | To     |
+  | --------------- | ------ | ------ |
+  | @angular/create | 18.0.4 | 18.1.1 |
+
+- [#6292](https://github.com/cloudflare/workers-sdk/pull/6292) [`5d2e0f7`](https://github.com/cloudflare/workers-sdk/commit/5d2e0f75f80ca084d90d30dc766d4b46281181f2) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency    | From  | To    |
+  | ------------- | ----- | ----- |
+  | create-svelte | 6.3.2 | 6.3.3 |
+
+- [#6293](https://github.com/cloudflare/workers-sdk/pull/6293) [`821f020`](https://github.com/cloudflare/workers-sdk/commit/821f0201e89d1052125db0601055c038019022da) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency  | From  | To     |
+  | ----------- | ----- | ------ |
+  | create-hono | 0.9.0 | 0.10.0 |
+
 ## 2.22.0
 
 ### Minor Changes

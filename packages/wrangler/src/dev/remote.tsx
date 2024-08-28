@@ -11,7 +11,7 @@ import { withSourceURLs } from "../deployment-bundle/source-url";
 import { getInferredHost } from "../dev";
 import { UserError } from "../errors";
 import { logger } from "../logger";
-import { syncAssets } from "../sites";
+import { syncLegacyAssets } from "../sites";
 import {
 	getAccountChoices,
 	requireApiToken,
@@ -34,7 +34,7 @@ import type {
 	CfWorkerInit,
 } from "../deployment-bundle/worker";
 import type { ParseError } from "../parse";
-import type { AssetPaths } from "../sites";
+import type { LegacyAssetPaths } from "../sites";
 import type { ChooseAccountItem } from "../user";
 import type {
 	CfAccount,
@@ -105,7 +105,7 @@ interface RemoteProps {
 	bundle: EsbuildBundle | undefined;
 	format: CfScriptFormat | undefined;
 	isWorkersSite: boolean;
-	assetPaths: AssetPaths | undefined;
+	legacyAssetPaths: LegacyAssetPaths | undefined;
 	port: number;
 	ip: string;
 	localProtocol: "https" | "http";
@@ -142,7 +142,7 @@ export function Remote(props: RemoteProps) {
 		modules: props.bundle ? props.bundle.modules : [],
 		accountId: props.accountId,
 		bindings: props.bindings,
-		assetPaths: props.assetPaths,
+		legacyAssetPaths: props.legacyAssetPaths,
 		isWorkersSite: props.isWorkersSite,
 		compatibilityDate: props.compatibilityDate,
 		compatibilityFlags: props.compatibilityFlags,
@@ -207,7 +207,7 @@ interface RemoteWorkerProps {
 	modules: CfModule[];
 	accountId: string | undefined;
 	bindings: CfWorkerInit["bindings"];
-	assetPaths: AssetPaths | undefined;
+	legacyAssetPaths: LegacyAssetPaths | undefined;
 	isWorkersSite: boolean;
 	compatibilityDate: string | undefined;
 	compatibilityFlags: string[] | undefined;
@@ -310,7 +310,7 @@ export function useWorker(
 				legacyEnv: props.legacyEnv,
 				env: props.env,
 				isWorkersSite: props.isWorkersSite,
-				assetPaths: props.assetPaths,
+				legacyAssetPaths: props.legacyAssetPaths,
 				format: props.format,
 				bindings: props.bindings,
 				compatibilityDate: props.compatibilityDate,
@@ -413,7 +413,7 @@ export function useWorker(
 		props.bundle,
 		props.format,
 		props.accountId,
-		props.assetPaths,
+		props.legacyAssetPaths,
 		props.isWorkersSite,
 		props.compatibilityDate,
 		props.compatibilityFlags,
@@ -469,7 +469,7 @@ export async function startRemoteServer(
 		previewToken,
 		assetDirectory: props.isWorkersSite
 			? undefined
-			: props.assetPaths?.assetDirectory,
+			: props.legacyAssetPaths?.assetDirectory,
 		localProtocol: props.localProtocol,
 		customHttpsKeyPath: props.httpsKeyPath,
 		customHttpsCertPath: props.httpsCertPath,
@@ -559,7 +559,7 @@ export async function getRemotePreviewToken(props: RemoteProps) {
 			legacyEnv: props.legacyEnv,
 			env: props.env,
 			isWorkersSite: props.isWorkersSite,
-			assetPaths: props.assetPaths,
+			legacyAssetPaths: props.legacyAssetPaths,
 			format: props.format,
 			bindings: props.bindings,
 			compatibilityDate: props.compatibilityDate,
@@ -599,7 +599,7 @@ export async function createRemoteWorkerInit(props: {
 	legacyEnv: boolean | undefined;
 	env: string | undefined;
 	isWorkersSite: boolean;
-	assetPaths: AssetPaths | undefined;
+	legacyAssetPaths: LegacyAssetPaths | undefined;
 	format: CfScriptFormat;
 	bindings: CfWorkerInit["bindings"];
 	compatibilityDate: string | undefined;
@@ -620,14 +620,14 @@ export async function createRemoteWorkerInit(props: {
 		props.modules
 	);
 
-	const assets = await syncAssets(
+	const assets = await syncLegacyAssets(
 		props.accountId,
 		// When we're using the newer service environments, we wouldn't
 		// have added the env name on to the script name. However, we must
 		// include it in the kv namespace name regardless (since there's no
 		// concept of service environments for kv namespaces yet).
 		props.name + (!props.legacyEnv && props.env ? `-${props.env}` : ""),
-		props.isWorkersSite ? props.assetPaths : undefined,
+		props.isWorkersSite ? props.legacyAssetPaths : undefined,
 		true,
 		false,
 		undefined
@@ -676,6 +676,7 @@ export async function createRemoteWorkerInit(props: {
 		placement: undefined, // no placement in dev
 		tail_consumers: undefined, // no tail consumers in dev - TODO revisit?
 		limits: undefined, // no limits in preview - not supported yet but can be added
+		experimental_assets_jwt: undefined, // no remote mode for assets
 	};
 
 	return init;

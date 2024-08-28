@@ -8,7 +8,6 @@ import { version as wranglerVersion } from "../package.json";
 import { ai } from "./ai";
 import { cloudchamber } from "./cloudchamber";
 import { loadDotEnv, readConfig } from "./config";
-import { constellation } from "./constellation";
 import { d1 } from "./d1";
 import { deleteHandler, deleteOptions } from "./delete";
 import { deployHandler, deployOptions } from "./deploy";
@@ -43,6 +42,7 @@ import { kvBulk, kvKey, kvNamespace, registerKvSubcommands } from "./kv";
 import { logBuildFailure, logger, LOGGER_LEVELS } from "./logger";
 import * as metrics from "./metrics";
 import { mTlsCertificateCommands } from "./mtls-certificate/cli";
+import { writeOutput } from "./output";
 import { pages } from "./pages";
 import { APIError, formatMessage, ParseError } from "./parse";
 import { pubSubCommands } from "./pubsub/pubsub-commands";
@@ -66,6 +66,7 @@ import {
 	logout,
 	validateScopeKeys,
 } from "./user";
+import { debugLogFilepath } from "./utils/log-file";
 import { vectorize } from "./vectorize/index";
 import registerVersionsSubcommands from "./versions";
 import registerVersionsDeploymentsSubcommands from "./versions/deployments";
@@ -254,6 +255,16 @@ export function createCLIParser(argv: string[]) {
 					process.env[key] = value;
 				}
 			}
+
+			// Write a session entry to the output file (if there is one).
+			writeOutput({
+				type: "wrangler-session",
+				version: 1,
+				wrangler_version: wranglerVersion,
+				command_line_args: argv,
+				log_file_path: debugLogFilepath,
+			});
+
 			return true;
 		})
 		.epilogue(
@@ -266,6 +277,7 @@ export function createCLIParser(argv: string[]) {
 		"Commands:": `${chalk.bold("COMMANDS")}`,
 		"Options:": `${chalk.bold("OPTIONS")}`,
 		"Positionals:": `${chalk.bold("POSITIONALS")}`,
+		"Examples:": `${chalk.bold("EXAMPLES")}`,
 	});
 	wrangler.group(
 		["experimental-json-config", "config", "env", "help", "version"],
@@ -682,10 +694,16 @@ export function createCLIParser(argv: string[]) {
 	wrangler.command(
 		"whoami",
 		"🕵️  Retrieve your user information",
-		() => {},
+		(yargs) => {
+			return yargs.option("account", {
+				type: "string",
+				describe:
+					"Show membership information for the given account (id or name).",
+			});
+		},
 		async (args) => {
 			await printWranglerBanner();
-			await whoami();
+			await whoami(args.account);
 			const config = readConfig(undefined, args);
 			await metrics.sendMetricsEvent("view accounts", {
 				sendMetrics: config.send_metrics,
@@ -729,11 +747,6 @@ export function createCLIParser(argv: string[]) {
 		subdomainOptions,
 		subdomainHandler
 	);
-
-	// [DEPRECATED] constellation
-	wrangler.command("constellation", false, (aiYargs) => {
-		return constellation(aiYargs.command(subHelp));
-	});
 
 	// [DEPRECATED] secret:bulk
 	wrangler.command(
@@ -858,7 +871,8 @@ export async function main(argv: string[]): Promise<void> {
 					"Please ensure it has the correct permissions for this operation.\n";
 				logger.log(chalk.yellow(message));
 			}
-			await whoami();
+			const accountTag = (e as APIError)?.accountTag;
+			await whoami(accountTag);
 		} else if (e instanceof ParseError) {
 			e.notes.push({
 				text: "\nIf you think this is a bug, please open an issue at: https://github.com/cloudflare/workers-sdk/issues/new/choose",
